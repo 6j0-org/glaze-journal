@@ -20,18 +20,18 @@ suggests the real lines for the selected brand.
 
 **Importing from manufacturer sites:** paste a product page link into the glaze form ("Fill in"),
 or paste many links at once with "Import from links" on the Glazes tab. The server reads the
-page's name, code, brand, description and product image, and hands them to the browser, which
-estimates the glaze color from the image and encrypts and stores the image like any other photo. Mayco, Amaco (including Velvet underglazes) and Free Form Clay pages
+page's name, code, brand, description and product image, and the browser estimates the glaze color
+from the image. Product images go into a shared cache on the server (see [Encryption](#encryption)). Mayco, Amaco (including Velvet underglazes) and Free Form Clay pages
 are handled specifically; other manufacturers work when their pages carry standard product
 metadata (JSON-LD or Open Graph). Only public internet addresses are fetched.
 
 **Accounts:** people sign in with an anonymous identity from a [6j0.org identity server](https://gitlab.com/6j0-org/id)
 (`id.6j0.org`), so one passkey (or username and password) covers every 6j0.org app. Each account has its own
-journal, **end-to-end encrypted**: glazes, firing log, lists, and photos are encrypted in the browser, and the
+journal, **end-to-end encrypted**: glazes, firing log, lists, and your photos are encrypted in the browser, and the
 server only stores ciphertext (see [Encryption](#encryption)).
 
-No dependencies: a single Node server (`node:sqlite` for encrypted records, encrypted photos on disk) serves the app
-and its JSON API. On a phone, use "Add to Home Screen" to install it like an app.
+No dependencies: a single Node server (`node:sqlite` for encrypted records, encrypted photos and the product image
+cache on disk) serves the app and its JSON API. On a phone, use "Add to Home Screen" to install it like an app.
 
 ## Run
 
@@ -77,14 +77,19 @@ Same scheme as Bored? with a 6j0.org identity; the code is in `public/secure.js`
   browser makes the journal key on the first sign-in and stores only the wrapped copy on the server
   (`PUT /api/key`).
 - The journal key encrypts every record (AES-256-GCM, with the collection and record ID as additional data, so
-  the server can't swap records around) and every photo, including the MIME type. The server stores, per record,
-  the ciphertext plus the IDs of the photos it uses, so it can delete photos nothing uses any more.
+  the server can't swap records around) and every photo you add, including the MIME type. The server stores, per
+  record, the ciphertext plus the IDs of the photos it uses, so it can delete photos nothing uses any more.
+- **Product images are the exception.** They're public, so the server keeps one unencrypted copy of each in a
+  cache every account shares (`DATA_DIR/products/`, the `product_images` table), keyed by the SHA-256 of the
+  manufacturer's image URL. A glaze points at its product image (`image: {product: id}`) from inside its encrypted
+  record, so the database doesn't show which accounts use which images. The cache keeps each image's URL and
+  downloads it again if the file goes missing. Glazes saved before the cache existed keep their encrypted copies.
 - After sign-in the journal key stays in IndexedDB as a non-extractable `CryptoKey`, so reloads don't need to sign
   in again. Signing out deletes it. If the browser clears it while the session cookie is still valid, the app
   asks to sign in again to unlock.
 - **What the server still knows:** how many glazes, entries, and photos each account has, their sizes, when they
-  change, which photos belong to which record, and IP addresses. Manufacturer pages and catalog lookups go through
-  the server (they're public, but it sees which ones you look up).
+  change, which photos belong to which record, and IP addresses. Manufacturer pages, catalog lookups, and product
+  images go through the server (they're public, but it sees which ones each session looks up or loads).
 - **Lose every way into your 6j0.org identity and the journal is gone for good.** Nobody, including the server
   operator, can recover it. Add a second passkey or a password at `id.6j0.org`.
 
@@ -148,7 +153,8 @@ data are refused.
 | GET    | `/api/catalog/:source/lines` | product lines                                |
 | GET    | `/api/catalog/:source/lines/:line` | glazes in a line                       |
 | GET    | `/api/catalog/lines-by-brand` | `{brand: [line names]}`                     |
-| POST   | `/api/catalog/item`  | `{item}` → glaze fields plus `{imageData (base64), imageType, imageNote}` for the browser to encrypt |
-| POST   | `/api/import`        | `{url}` → `{name, code, brand, description, sourceUrl, imageData, imageType, imageNote}` |
+| POST   | `/api/catalog/item`  | `{item}` → glaze fields plus `{productImage, imageNote}` (the image is cached on the server) |
+| POST   | `/api/import`        | `{url}` → `{name, code, brand, description, sourceUrl, productImage, imageNote}` |
 | POST   | `/api/photos`        | encrypted photo bytes as `application/octet-stream` → `{id}` |
 | GET    | `/photos/:id`        | the encrypted photo                                  |
+| GET    | `/products/:id`      | a cached product image (unencrypted, shared by all accounts) |

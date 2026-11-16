@@ -50,14 +50,19 @@ import {
     photoCache.set(id, entry);
     return entry.promise;
   }
+  // A glaze's product image is { product: id }: an unencrypted file in the server's shared cache, used as is.
+  // Everything else ({ id }) is the account's own encrypted photo.
+  const productSrc = (p) => "/products/" + encodeURIComponent(p.product);
+  const hasPhoto = (p) => Boolean(p?.id || p?.product);
   function photoSrc(p) {
+    if (p?.product) return productSrc(p);
     if (!p?.id) return "";
     const c = photoCache.get(p.id);
     if (!c) loadPhoto(p.id);
     return c?.url || BLANK;
   }
-  const photoUrl = async (p) => (!p?.id ? "" : photoCache.get(p.id)?.url || (await (photoCache.get(p.id)?.promise || loadPhoto(p.id))));
-  const photoImg = (p, attrs = "") => `<img data-pid="${esc(p.id)}" src="${esc(photoSrc(p))}" ${attrs}>`;
+  const photoUrl = async (p) => (p?.product ? productSrc(p) : !p?.id ? "" : photoCache.get(p.id)?.url || (await (photoCache.get(p.id)?.promise || loadPhoto(p.id))));
+  const photoImg = (p, attrs = "") => p.product ? `<img src="${esc(photoSrc(p))}" loading="lazy" ${attrs}>` : `<img data-pid="${esc(p.id)}" src="${esc(photoSrc(p))}" ${attrs}>`;
   function seedPhoto(id, blob) { const url = URL.createObjectURL(blob); photoCache.set(id, { url, promise: Promise.resolve(url) }); }
   function clearPhotos() { for (const c of photoCache.values()) if (c.url) URL.revokeObjectURL(c.url); photoCache.clear(); }
   function resolveGlaze(item) {
@@ -113,12 +118,10 @@ import {
       seedPhoto(r.id, blob);
       return { id: r.id };
     }
-    // Product images come back from the server as plain bytes; encrypt and store them like any other photo.
-    async function withImage(r) {
-      const { imageData, imageType, ...rest } = r;
-      if (!imageData) return { ...rest, image: null };
-      const bytes = Uint8Array.from(atob(imageData), (ch) => ch.charCodeAt(0));
-      return { ...rest, image: await upload(new Blob([bytes], { type: imageType })) };
+    // Product images stay in the server's shared cache; the glaze record (encrypted) just points at one.
+    function withImage(r) {
+      const { productImage, ...rest } = r;
+      return { ...rest, image: productImage ? { product: productImage } : null };
     }
     async function decryptState(raw) {
       const legacy = []; let bad = 0;
@@ -321,7 +324,7 @@ import {
     const byCode = (x, y) => (x.code || "~").localeCompare(y.code || "~", undefined, { numeric: true }) || byText(x.name, y.name);
     const card = (g) => {
       const n = usageCount("glaze", g.id);
-      const thumb = g.image?.id ? `<div class="thumbwrap">${photoImg(g.image, 'class="gthumb" alt=""')}<i class="dot" style="background:${esc(g.color)}"></i></div>` : `<svg viewBox="0 0 60 80" aria-hidden="true">${tileSvg(g.color, g.type)}</svg>`;
+      const thumb = hasPhoto(g.image) ? `<div class="thumbwrap">${photoImg(g.image, 'class="gthumb" alt=""')}<i class="dot" style="background:${esc(g.color)}"></i></div>` : `<svg viewBox="0 0 60 80" aria-hidden="true">${tileSvg(g.color, g.type)}</svg>`;
       return `<button class="glaze-card" data-glaze="${esc(g.id)}">${thumb}<div>${g.code ? `<div class="gcode">${esc(g.code)}</div>` : ""}<div class="gname">${esc(g.name)}</div><div class="gsub"><span class="pill">${esc(g.type || "No type yet")}</span></div><div class="gsub" style="margin-top:4px">${n ? `${n} entr${n === 1 ? "y" : "ies"}` : "Not used yet"}</div></div></button>`;
     };
     const brands = [...new Set(shown.map((g) => g.brand))].sort(byText);
@@ -500,10 +503,10 @@ import {
     const s = $("#gfFetchStatus"); s.textContent = text; s.hidden = !text; s.classList.toggle("err", !!err);
   }
   function renderGlazeImage() {
-    const has = Boolean(glazeDraft.image?.id);
+    const has = hasPhoto(glazeDraft.image);
     $("#gfImageField").hidden = !has;
     $("#gfPick").hidden = !has;
-    if (has) { $("#gfImage").dataset.pid = glazeDraft.image.id; $("#gfImage").src = photoSrc(glazeDraft.image); }
+    if (has) { $("#gfImage").dataset.pid = glazeDraft.image.id || ""; $("#gfImage").src = photoSrc(glazeDraft.image); }
     const src = $("#gfSource");
     src.hidden = !glazeDraft.sourceUrl;
     if (glazeDraft.sourceUrl) {

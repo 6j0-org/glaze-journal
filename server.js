@@ -1,7 +1,8 @@
 // Glaze Journal server: zero dependencies (Node >= 24 for node:sqlite).
 // Journals are end-to-end encrypted: the browser encrypts every record and photo with a key the server never sees
-// (public/secure.js), so this server stores and serves ciphertext. It still reads manufacturer pages and catalogs,
-// which are public, and hands what it finds to the browser to encrypt.
+// (public/secure.js), so this server stores and serves ciphertext. Product images from manufacturer sites are public,
+// so they're the exception: one unencrypted copy each, in a cache all accounts share (/products/:id). Which glazes
+// use which product image is inside the encrypted records.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -15,6 +16,7 @@ const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
 const PHOTO_DIR = path.join(DATA_DIR, "photos");
+const PRODUCT_DIR = path.join(DATA_DIR, "products");
 const PUBLIC_DIR = path.join(import.meta.dirname, "public");
 const MAX_PHOTO_BYTES = 25 * 1024 * 1024;
 const SESSION_DAYS = 30;
@@ -49,6 +51,7 @@ const STATIC_TYPES = {
   ".webmanifest": "application/manifest+json",
 };
 fs.mkdirSync(PHOTO_DIR, { recursive: true });
+fs.mkdirSync(PRODUCT_DIR, { recursive: true });
 const db = new DatabaseSync(path.join(DATA_DIR, "glaze-journal.db"));
 // These CREATE TABLEs are the original schema and never change. Every change since is a numbered migration below,
 // tracked in PRAGMA user_version. Append new ones; never edit or reorder old ones.
@@ -88,6 +91,15 @@ const MIGRATIONS = [
    DROP TABLE docs;
    ALTER TABLE docs_v1 RENAME TO docs;
    ALTER TABLE photos ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;`,
+  // 2: shared cache of manufacturer product images, unencrypted. id is the SHA-256 of the image URL, which is kept
+  // so a missing file can be downloaded again.
+  `CREATE TABLE product_images (
+     id      TEXT PRIMARY KEY,
+     url     TEXT NOT NULL,
+     type    TEXT NOT NULL,
+     size    INTEGER NOT NULL,
+     fetched INTEGER NOT NULL
+   );`,
 ];
 for (let v = db.prepare("PRAGMA user_version").get().user_version; v < MIGRATIONS.length; v++) {
   db.exec("BEGIN");
@@ -105,6 +117,9 @@ const q = {
   addPhoto: db.prepare("INSERT INTO photos (id, type, size, created, user_id) VALUES (?, ?, ?, ?, ?)"),
   delPhoto: db.prepare("DELETE FROM photos WHERE id = ?"),
   oldPhotos: db.prepare("SELECT id, type FROM photos WHERE created < ?"),
+  product: db.prepare("SELECT url, type FROM product_images WHERE id = ?"),
+  putProduct: db.prepare(`INSERT INTO product_images (id, url, type, size, fetched) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (id) DO UPDATE SET type = excluded.type, size = excluded.size, fetched = excluded.fetched`),
   userBySub: db.prepare("SELECT id FROM users WHERE sub = ?"),
   user: db.prepare("SELECT guid, wrapped_key FROM users WHERE id = ?"),
   addUser: db.prepare("INSERT INTO users (sub, guid, created) VALUES (?, ?, ?)"),
@@ -144,14 +159,30 @@ const photoRefs = (d) => (Array.isArray(d?.photos) ? d.photos : [d?.pre?.id, d?.
 const forClient = (id, d) => (typeof d.enc === "string" ? { id, enc: d.enc } : { id, legacy: d });
 
 // ---------- photos ----------
-// Download a product image for the browser, which encrypts it and uploads it like any other photo.
+// ---------- shared product image cache ----------
+// Each manufacturer image is downloaded once and shared by every account that imports it.
+const productId = (url) => crypto.createHash("sha256").update(url).digest("hex");
+const productFile = (id, type) => path.join(PRODUCT_DIR, id + PHOTO_TYPES[type]);
+const fetchingProducts = new Map(); // id -> promise, so simultaneous imports of one image download it once
+function cacheProduct(url) {
+  const id = productId(url), row = q.product.get(id);
+  if (row && fs.existsSync(productFile(id, row.type))) return Promise.resolve(id);
+  if (!fetchingProducts.has(id)) {
+    fetchingProducts.set(id, (async () => {
+      const { type, buf } = await fetchImage(url);
+      if (!PHOTO_TYPES[type] || type === ENCRYPTED || !buf.length) throw new HttpError(415, "The product image is in a format the journal can't store.");
+      fs.writeFileSync(productFile(id, type), buf);
+      q.putProduct.run(id, url, type, buf.length, Date.now());
+      return id;
+    })().finally(() => fetchingProducts.delete(id)));
+  }
+  return fetchingProducts.get(id);
+}
+// For import responses: { productImage: id } on success, or a note saying why there's no image.
 async function remoteImage(imageUrl) {
-  if (!imageUrl) return { imageData: null, imageNote: "No product image was found." };
-  try {
-    const { type, buf } = await fetchImage(imageUrl);
-    if (PHOTO_TYPES[type] && type !== ENCRYPTED && buf.length) return { imageData: buf.toString("base64"), imageType: type, imageNote: "" };
-    return { imageData: null, imageNote: "The product image is in a format the journal can't store." };
-  } catch (e) { return { imageData: null, imageNote: e.message || "Couldn't download the product image." }; }
+  if (!imageUrl) return { productImage: null, imageNote: "No product image was found." };
+  try { return { productImage: await cacheProduct(imageUrl), imageNote: "" }; }
+  catch (e) { return { productImage: null, imageNote: e.message || "Couldn't download the product image." }; }
 }
 // Photo IDs are random and unique across all journals, so one global set is enough.
 function referencedPhotoIds() {
@@ -301,7 +332,7 @@ async function handle(req, res) {
   }
 
   // The page and its scripts load without a session; it shows a sign-in screen when the API says 401.
-  if (!p.startsWith("/api/") && !p.startsWith("/photos/")) {
+  if (!p.startsWith("/api/") && !p.startsWith("/photos/") && !p.startsWith("/products/")) {
     if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, { error: "Method not allowed" });
     return serveStatic(res, p);
   }
@@ -394,6 +425,22 @@ async function handle(req, res) {
     return send(res, 200, {
       brand: str(full.brand, 200), line: str(full.line, 200), code: str(full.code, 40), name: str(full.name, 200),
       description: str(full.description, 2000), sourceUrl: str(full.url, 2000), ...(await remoteImage(full.image)),
+    });
+  }
+
+  m = /^\/products\/([0-9a-f]{64})$/.exec(p);
+  if (m && req.method === "GET") {
+    const row = q.product.get(m[1]);
+    if (!row) return send(res, 404, { error: "Not found" });
+    let file = productFile(m[1], row.type);
+    if (!fs.existsSync(file)) { // the file went missing: download it again from the URL it came from
+      try { await cacheProduct(row.url); file = productFile(m[1], q.product.get(m[1]).type); }
+      catch { return send(res, 404, { error: "Not found" }); }
+    }
+    const type = q.product.get(m[1]).type;
+    return fs.readFile(file, (err, buf) => {
+      if (err) return send(res, 404, { error: "Not found" });
+      send(res, 200, buf, { "Content-Type": type, "Cache-Control": "private, max-age=31536000, immutable" });
     });
   }
 
