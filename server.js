@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { importProduct, fetchImage } from "./importer.js";
+import { importProduct, fetchImage, ImportError } from "./importer.js";
 import { SOURCES, sourceById, linesByBrand, completeItem } from "./catalog.js";
 import { verifyIdToken, IdTokenError } from "./idtoken.js";
 
@@ -457,9 +457,21 @@ async function handle(req, res) {
   return send(res, 404, { error: "Not found" });
 }
 
+// Requests this slow are close to the gateway's 15 s timeout: log them even when they succeed.
+const SLOW_MS = 10_000;
+// Log the path only: query strings and bodies may carry tokens or user data.
+const reqLabel = (req) => `${req.method} ${(req.url || "").split("?")[0]}`;
+
 http.createServer((req, res) => {
+  const start = Date.now();
+  res.on("finish", () => {
+    const ms = Date.now() - start;
+    if (ms >= SLOW_MS) console.warn(`slow: ${reqLabel(req)} ${res.statusCode} in ${ms} ms`);
+  });
   handle(req, res).catch((err) => {
-    if (!err.status) console.error(err);
+    if (!err.status) console.error(`${reqLabel(req)} failed:`, err);
+    // Manufacturer-site failures (unreachable, timeouts, bad responses) go to the user as messages; log them too.
+    else if (err instanceof ImportError) console.warn(`${reqLabel(req)} ${err.status}: ${err.message} (${Date.now() - start} ms)`);
     if (!res.headersSent) send(res, err.status || 500, { error: err.status ? err.message : "Something went wrong on the server." });
   });
 }).listen(PORT, HOST, () => {

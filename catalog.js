@@ -48,13 +48,13 @@ async function maycoCategories() {
 }
 async function maycoProducts() {
   return cached("mayco:products", DAY / 2, async () => {
-    const all = [];
-    for (let page = 1; page <= 30; page++) {
-      const { data, headers } = await getJson(`${MAYCO_API}/products?per_page=100&page=${page}`);
-      all.push(...data);
-      if (page >= Number(headers.get("x-wp-totalpages") || 1)) break;
-    }
-    return all;
+    // Page 1 says how many pages there are; fetch the rest in parallel. Sequentially, ~9 pages at
+    // ~2 s each outran the gateway's 15 s request timeout on a cold cache.
+    const page = (n) => getJson(`${MAYCO_API}/products?per_page=100&page=${n}`);
+    const first = await page(1);
+    const total = Math.min(30, Number(first.headers.get("x-wp-totalpages") || 1));
+    const rest = await Promise.all(Array.from({ length: total - 1 }, (_, i) => page(i + 2)));
+    return [first, ...rest].flatMap((r) => r.data);
   });
 }
 async function maycoLineMap() {
