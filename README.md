@@ -20,39 +20,106 @@ suggests the real lines for the selected brand.
 
 **Importing from manufacturer sites:** paste a product page link into the glaze form ("Fill in"),
 or paste many links at once with "Import from links" on the Glazes tab. The server reads the
-page's name, code, brand, description and product image (saved locally), and the browser estimates
-the glaze color from the image. Mayco, Amaco (including Velvet underglazes) and Free Form Clay pages
+page's name, code, brand, description and product image, and hands them to the browser, which
+estimates the glaze color from the image and encrypts and stores the image like any other photo. Mayco, Amaco (including Velvet underglazes) and Free Form Clay pages
 are handled specifically; other manufacturers work when their pages carry standard product
 metadata (JSON-LD or Open Graph). Only public internet addresses are fetched.
 
-No dependencies: a single Node server (`node:sqlite` for records, photos on disk) serves the app
+**Accounts:** people sign in with an anonymous identity from a [6j0.org identity server](https://gitlab.com/6j0-org/id)
+(`id.6j0.org`), so one passkey (or username and password) covers every 6j0.org app. Each account has its own
+journal, **end-to-end encrypted**: glazes, firing log, lists, and photos are encrypted in the browser, and the
+server only stores ciphertext (see [Encryption](#encryption)).
+
+No dependencies: a single Node server (`node:sqlite` for encrypted records, encrypted photos on disk) serves the app
 and its JSON API. On a phone, use "Add to Home Screen" to install it like an app.
 
 ## Run
 
 ```sh
-npm start                    # http://localhost:3000
-APP_PASSWORD=secret npm start  # require a password (any username)
+ID_ORIGIN=https://id.6j0.org npm start   # http://localhost:3000
 ```
 
-Requires Node 24 or newer.
+Requires Node 24 or newer. The identity server must list this app in its `APPS`, with the origin people open it at
+(e.g. `APPS=glaze-journal=https://glaze.6j0.org`), since it only sends sign-ins back to that origin.
 
 | Variable       | Default  | Purpose                                             |
 | -------------- | -------- | --------------------------------------------------- |
 | `PORT`         | `3000`   | Listen port                                         |
 | `HOST`         | `0.0.0.0`| Listen address                                      |
 | `DATA_DIR`     | `./data` | SQLite database (`glaze-journal.db`) and `photos/`  |
-| `APP_PASSWORD` | unset    | Enables HTTP Basic auth. Set it whenever the app is reachable from the internet. |
+| `ID_ORIGIN`    | required | The 6j0.org identity server, e.g. `https://id.6j0.org` |
+| `ID_APP`       | `glaze-journal` | This app's name in the identity server's `APPS` |
+| `ID_JWKS_URL`  | `ID_ORIGIN/.well-known/jwks.json` | Where to fetch the identity server's public keys (e.g. an in-cluster Service URL) |
+| `ID_OWNER_SUB` | unset    | The identity that gets journal data from before sign-in existed. Unset: the first account to sign in gets it. |
+| `ORIGIN`       | unset    | This app's public origin, e.g. `https://glaze.6j0.org`. `https:` turns on `Secure` cookies. |
+
+### Sign-in
+
+1. "Sign in with 6j0.org" makes a random nonce and an ephemeral ECDH key pair, and goes to
+   `ID_ORIGIN/authorize?app=glaze-journal&nonce=…&epk=…`.
+2. The identity server signs the person in and sends the browser back to `/` with a signed token (an Ed25519 JWT)
+   in the URL fragment, which never reaches a server.
+3. The page checks the nonce and posts the token to `/api/id/login`. `idtoken.js` (the same file as in Bored?)
+   verifies the signature against the identity server's JWKS, plus `iss`, `aud`, `exp`, `nonce`, and one-time use
+   (`jti`). The server then finds or creates the account for the token's `sub` and sets a session cookie
+   (`HttpOnly`, `SameSite=Lax`, 30 days; the database stores only its SHA-256).
+4. The page decrypts the app key that came with the token (below) and unlocks the journal.
+
+### Encryption
+
+Same scheme as Bored? with a 6j0.org identity; the code is in `public/secure.js`.
+
+- Alongside the token, the identity server hands the page Glaze Journal's own 32-byte **app key**, encrypted to
+  the one-time ECDH key the page made, in the URL fragment. It's derived from the identity's root secret (which
+  only the person's passkey or password unlocks), so every device signed in to the same identity gets the same
+  key. Other 6j0.org apps get different keys and can't read journals.
+- HKDF turns the app key into a key-encryption key that wraps the account's random 256-bit **journal key**. The
+  browser makes the journal key on the first sign-in and stores only the wrapped copy on the server
+  (`PUT /api/key`).
+- The journal key encrypts every record (AES-256-GCM, with the collection and record ID as additional data, so
+  the server can't swap records around) and every photo, including the MIME type. The server stores, per record,
+  the ciphertext plus the IDs of the photos it uses, so it can delete photos nothing uses any more.
+- After sign-in the journal key stays in IndexedDB as a non-extractable `CryptoKey`, so reloads don't need to sign
+  in again. Signing out deletes it. If the browser clears it while the session cookie is still valid, the app
+  asks to sign in again to unlock.
+- **What the server still knows:** how many glazes, entries, and photos each account has, their sizes, when they
+  change, which photos belong to which record, and IP addresses. Manufacturer pages and catalog lookups go through
+  the server (they're public, but it sees which ones you look up).
+- **Lose every way into your 6j0.org identity and the journal is gone for good.** Nobody, including the server
+  operator, can recover it. Add a second passkey or a password at `id.6j0.org`.
+
+**Upgrading from an older version:** journals made before sign-in existed are unencrypted and belong to nobody
+until someone claims them. Set `ID_OWNER_SUB` to your identity's `sub` to choose who, or the first account to sign
+in gets them, so sign in right after deploying. That browser then encrypts the old records and photos and the
+server deletes the plain copies (SQLite's `secure_delete` and a WAL checkpoint keep old copies from lingering in
+the database files). The schema migration runs on startup (`MIGRATIONS` in `server.js`, tracked in
+`PRAGMA user_version`); back up `DATA_DIR` first.
+
+To try it locally, run the identity server on `localhost` and this app on `127.0.0.1` (cookies ignore the port, so
+two apps on one hostname would overwrite each other's session cookie):
+
+```sh
+# in the id repo
+APPS=glaze-journal=http://127.0.0.1:3000 ORIGIN=http://localhost:4000 npm start
+# here
+ID_ORIGIN=http://localhost:4000 ORIGIN=http://127.0.0.1:3000 npm start   # open http://127.0.0.1:3000
+```
 
 ## Docker
 
+CI builds multi-arch (amd64, arm64) images: `.gitlab-ci.yml` publishes to this project's GitLab Container Registry
+(`:latest`, `:<short sha>`, and a sortable `:dev-<short sha>-<unix time>` for Flux image automation on the default
+branch, `:<tag>` for tags), and `.github/workflows/image.yml` publishes to `ghcr.io`. Merge and pull requests only
+build.
+
 ```sh
 docker build -t glaze-journal .
-docker run -d -p 3000:3000 -v glaze-data:/data -e APP_PASSWORD=secret glaze-journal
+docker run -d -p 3000:3000 -v glaze-data:/data \
+  -e ID_ORIGIN=https://id.6j0.org -e ORIGIN=https://glaze.6j0.org glaze-journal
 ```
 
-Put it behind HTTPS (Caddy, Traefik, a tunnel, etc.) when exposing it: Basic auth sends the
-password with every request, and phones only offer "install" for HTTPS sites.
+Put it behind HTTPS (Caddy, Traefik, a tunnel, etc.) when exposing it: session cookies are only marked `Secure`
+when `ORIGIN` is `https:`, and phones only offer "install" for HTTPS sites.
 
 ## Backups
 
@@ -61,21 +128,27 @@ Everything lives in `DATA_DIR`. Copy the folder while the server is stopped, or 
 
 ## API
 
+Everything except `/api/config`, `/api/id/login`, `/api/logout`, and `/healthz` needs a session and only sees the
+signed-in account's journal. Without one it answers 401. Requests marked `Sec-Fetch-Site: cross-site` that change
+data are refused.
+
 | Method | Path                 | Body / result                                        |
 | ------ | -------------------- | ---------------------------------------------------- |
-| GET    | `/api/state`         | `{lists, glazes, logs}`                              |
-| PUT    | `/api/lists`         | `{brands, types, clays}`                             |
-| POST   | `/api/glazes`        | `{brand, line, name, code, type, color, description, image, sourceUrl}` → created glaze |
-| PUT    | `/api/glazes/:id`    | same                                                 |
-| DELETE | `/api/glazes/:id`    |                                                      |
-| POST   | `/api/logs`          | `{kind, title, date, clay, firing, glazes[], notes, pre, post}` |
-| PUT    | `/api/logs/:id`      | same                                                 |
+| GET    | `/api/config`        | `{idOrigin, idApp}`                                  |
+| POST   | `/api/id/login`      | `{token, nonce}` → `{guid, wrappedKey}` and sets the session cookie |
+| POST   | `/api/logout`        | ends the session                                     |
+| PUT    | `/api/key`           | `{wrappedKey}`, once per account (409 if already set) |
+| GET    | `/api/state`         | `{guid, wrappedKey, lists, glazes, logs}`; each record is `{id, enc}` (or `{id, legacy}` from before encryption) |
+| PUT    | `/api/lists`         | `{enc}`                                              |
+| PUT    | `/api/glazes/:id`    | `{enc, photos: [photo ids]}`; creates or replaces (the browser picks the ID) |
+| DELETE | `/api/glazes/:id`    | also deletes photos nothing else uses                |
+| PUT    | `/api/logs/:id`      | `{enc, photos: [photo ids]}`                         |
 | DELETE | `/api/logs/:id`      | also deletes its photos                              |
 | GET    | `/api/catalog`       | catalog sources                                      |
 | GET    | `/api/catalog/:source/lines` | product lines                                |
 | GET    | `/api/catalog/:source/lines/:line` | glazes in a line                       |
 | GET    | `/api/catalog/lines-by-brand` | `{brand: [line names]}`                     |
-| POST   | `/api/catalog/item`  | `{item}` → glaze fields with the image saved locally |
-| POST   | `/api/import`        | `{url}` → `{name, code, brand, description, image, sourceUrl, imageNote}` |
-| POST   | `/api/photos`        | raw image bytes with an image `Content-Type` → `{id}`|
-| GET    | `/photos/:id`        | the image                                            |
+| POST   | `/api/catalog/item`  | `{item}` → glaze fields plus `{imageData (base64), imageType, imageNote}` for the browser to encrypt |
+| POST   | `/api/import`        | `{url}` → `{name, code, brand, description, sourceUrl, imageData, imageType, imageNote}` |
+| POST   | `/api/photos`        | encrypted photo bytes as `application/octet-stream` → `{id}` |
+| GET    | `/photos/:id`        | the encrypted photo                                  |

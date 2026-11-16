@@ -4,3 +4,7 @@ tools/
 glaze-journal.html
 *.md
 .git
+.github
+.gitlab-ci.yml
+Dockerfile
+.dockerignore

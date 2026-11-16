@@ -1,4 +1,7 @@
 // Glaze Journal server: zero dependencies (Node >= 24 for node:sqlite).
+// Journals are end-to-end encrypted: the browser encrypts every record and photo with a key the server never sees
+// (public/secure.js), so this server stores and serves ciphertext. It still reads manufacturer pages and catalogs,
+// which are public, and hands what it finds to the browser to encrypt.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,22 +9,37 @@ import crypto from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { importProduct, fetchImage } from "./importer.js";
 import { SOURCES, sourceById, linesByBrand, completeItem } from "./catalog.js";
+import { verifyIdToken, IdTokenError } from "./idtoken.js";
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
 const PHOTO_DIR = path.join(DATA_DIR, "photos");
 const PUBLIC_DIR = path.join(import.meta.dirname, "public");
-const PASSWORD = process.env.APP_PASSWORD || "";
 const MAX_PHOTO_BYTES = 25 * 1024 * 1024;
+const SESSION_DAYS = 30;
+
+// People sign in with an identity from a 6j0.org identity server at ID_ORIGIN. The browser goes to
+// ID_ORIGIN/authorize and comes back with a signed token in the URL fragment, which this server verifies.
+// ID_APP is this app's name in the identity server's APPS list. ID_JWKS_URL overrides where its public keys are
+// fetched from (e.g. an in-cluster Service URL). ORIGIN (e.g. https://glaze.6j0.org) turns on Secure cookies.
+// Journals made before sign-in existed are unencrypted and belong to nobody until claimed: by the identity
+// ID_OWNER_SUB if it is set, otherwise by the first account that signs in. The owner's browser then encrypts them.
+const ID = (() => {
+  const origin = process.env.ID_ORIGIN || "";
+  if (!origin || new URL(origin).origin !== origin) throw new Error("ID_ORIGIN is required, e.g. ID_ORIGIN=https://id.6j0.org");
+  return { origin, app: process.env.ID_APP || "glaze-journal", jwksUrl: process.env.ID_JWKS_URL || `${origin}/.well-known/jwks.json` };
+})();
+const SECURE_COOKIE = String(process.env.ORIGIN || "").startsWith("https:") ? "; Secure" : "";
+const OWNER_SUB = process.env.ID_OWNER_SUB || "";
+const UNCLAIMED = 0; // user_id of data from before sign-in existed
 const MAX_JSON_BYTES = 1024 * 1024;
 
-const DEFAULT_LISTS = {
-  brands: ["Mayco", "Amaco", "Freeform", "Velvet Underglaze"],
-  types: ["Stable", "Float", "Fluid"],
-  clays: ["Laguna Speckled Buff", "Laguna Dover White"],
-};
+// Encrypted photos are stored as application/octet-stream. The image types are for unencrypted photos from before
+// encryption, until their owner's browser re-encrypts them.
+const ENCRYPTED = "application/octet-stream";
 const PHOTO_TYPES = {
+  [ENCRYPTED]: ".bin",
   "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
   "image/gif": ".gif", "image/heic": ".heic", "image/heif": ".heif", "image/avif": ".avif",
 };
@@ -30,13 +48,14 @@ const STATIC_TYPES = {
   ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png",
   ".webmanifest": "application/manifest+json",
 };
-// Files the browser fetches without credentials (install prompts, icons).
-const PUBLIC_UNAUTHED = new Set(["/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png"]);
-
 fs.mkdirSync(PHOTO_DIR, { recursive: true });
 const db = new DatabaseSync(path.join(DATA_DIR, "glaze-journal.db"));
+// These CREATE TABLEs are the original schema and never change. Every change since is a numbered migration below,
+// tracked in PRAGMA user_version. Append new ones; never edit or reorder old ones.
 db.exec(`
   PRAGMA journal_mode = WAL;
+  PRAGMA foreign_keys = ON;
+  PRAGMA secure_delete = ON;
   CREATE TABLE IF NOT EXISTS docs (
     coll TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL,
     PRIMARY KEY (coll, id)
@@ -45,90 +64,107 @@ db.exec(`
     id TEXT PRIMARY KEY, type TEXT NOT NULL, size INTEGER NOT NULL, created INTEGER NOT NULL
   );
 `);
+const MIGRATIONS = [
+  // 1: accounts and encryption. Each 6j0.org identity (sub) gets its own journal; existing rows get user_id 0
+  // (unclaimed). guid is a random public ID for the account (never the sub); wrapped_key is the journal key,
+  // encrypted in the browser under a key derived from this app's 6j0.org app key.
+  `CREATE TABLE users (
+     id          INTEGER PRIMARY KEY,
+     sub         TEXT NOT NULL UNIQUE,
+     guid        TEXT NOT NULL UNIQUE,
+     wrapped_key TEXT,
+     created     INTEGER NOT NULL
+   );
+   CREATE TABLE sessions (
+     token_hash TEXT PRIMARY KEY,
+     user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     created    INTEGER NOT NULL
+   );
+   CREATE TABLE docs_v1 (
+     user_id INTEGER NOT NULL, coll TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL,
+     PRIMARY KEY (user_id, coll, id)
+   );
+   INSERT INTO docs_v1 (user_id, coll, id, data) SELECT 0, coll, id, data FROM docs;
+   DROP TABLE docs;
+   ALTER TABLE docs_v1 RENAME TO docs;
+   ALTER TABLE photos ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;`,
+];
+for (let v = db.prepare("PRAGMA user_version").get().user_version; v < MIGRATIONS.length; v++) {
+  db.exec("BEGIN");
+  try { db.exec(MIGRATIONS[v]); db.exec(`PRAGMA user_version = ${v + 1}`); db.exec("COMMIT"); }
+  catch (e) { db.exec("ROLLBACK"); throw e; }
+}
 
 const q = {
-  all: db.prepare("SELECT id, data FROM docs WHERE coll = ?"),
-  get: db.prepare("SELECT data FROM docs WHERE coll = ? AND id = ?"),
-  put: db.prepare("INSERT INTO docs (coll, id, data) VALUES (?, ?, ?) ON CONFLICT (coll, id) DO UPDATE SET data = excluded.data"),
-  del: db.prepare("DELETE FROM docs WHERE coll = ? AND id = ?"),
-  photo: db.prepare("SELECT type FROM photos WHERE id = ?"),
-  addPhoto: db.prepare("INSERT INTO photos (id, type, size, created) VALUES (?, ?, ?, ?)"),
+  all: db.prepare("SELECT id, data FROM docs WHERE user_id = ? AND coll = ?"),
+  get: db.prepare("SELECT data FROM docs WHERE user_id = ? AND coll = ? AND id = ?"),
+  put: db.prepare("INSERT INTO docs (user_id, coll, id, data) VALUES (?, ?, ?, ?) ON CONFLICT (user_id, coll, id) DO UPDATE SET data = excluded.data"),
+  del: db.prepare("DELETE FROM docs WHERE user_id = ? AND coll = ? AND id = ?"),
+  allPhotoRefs: db.prepare("SELECT data FROM docs WHERE coll IN ('logs', 'glazes')"),
+  photo: db.prepare("SELECT type, user_id FROM photos WHERE id = ?"),
+  addPhoto: db.prepare("INSERT INTO photos (id, type, size, created, user_id) VALUES (?, ?, ?, ?, ?)"),
   delPhoto: db.prepare("DELETE FROM photos WHERE id = ?"),
   oldPhotos: db.prepare("SELECT id, type FROM photos WHERE created < ?"),
+  userBySub: db.prepare("SELECT id FROM users WHERE sub = ?"),
+  user: db.prepare("SELECT guid, wrapped_key FROM users WHERE id = ?"),
+  addUser: db.prepare("INSERT INTO users (sub, guid, created) VALUES (?, ?, ?)"),
+  setKey: db.prepare("UPDATE users SET wrapped_key = ? WHERE id = ? AND wrapped_key IS NULL"),
+  firstUser: db.prepare("SELECT MIN(id) id FROM users"),
+  claimDocs: db.prepare(`UPDATE docs SET user_id = ? WHERE user_id = ${UNCLAIMED}`),
+  claimPhotos: db.prepare(`UPDATE photos SET user_id = ? WHERE user_id = ${UNCLAIMED}`),
+  addSession: db.prepare("INSERT INTO sessions (token_hash, user_id, created) VALUES (?, ?, ?)"),
+  session: db.prepare("SELECT user_id FROM sessions WHERE token_hash = ? AND created > ?"),
+  delSession: db.prepare("DELETE FROM sessions WHERE token_hash = ?"),
+  oldSessions: db.prepare("DELETE FROM sessions WHERE created <= ?"),
 };
 
-const listDocs = (coll) => q.all.all(coll).map((r) => ({ id: r.id, ...JSON.parse(r.data) }));
-const getDoc = (coll, id) => { const r = q.get.get(coll, id); return r ? JSON.parse(r.data) : null; };
+const listDocs = (uid, coll) => q.all.all(uid, coll).map((r) => ({ id: r.id, ...JSON.parse(r.data) }));
+const getDoc = (uid, coll, id) => { const r = q.get.get(uid, coll, id); return r ? JSON.parse(r.data) : null; };
 
 // ---------- validation ----------
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
 const str = (v, max = 2000) => (typeof v === "string" ? v.trim().slice(0, max) : "");
-const strList = (v) => (Array.isArray(v) ? [...new Set(v.map((x) => str(x, 200)).filter(Boolean))] : []);
-const isColor = (v) => typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v);
 const isPhotoId = (v) => typeof v === "string" && /^[0-9a-f]{32}$/.test(v);
 
-function cleanLists(b) {
-  return { brands: strList(b.brands), types: strList(b.types), clays: strList(b.clays) };
-}
-function cleanGlaze(b, prev) {
-  const sourceUrl = /^https?:\/\//i.test(str(b.sourceUrl)) ? str(b.sourceUrl) : "";
-  const g = {
-    brand: str(b.brand, 200), line: str(b.line, 200), name: str(b.name, 200), code: str(b.code, 40), type: str(b.type, 200),
-    color: isColor(b.color) ? b.color : "#888888",
-    description: str(b.description, 2000), sourceUrl, image: cleanPhoto(b.image),
-  };
-  if (!g.brand || !g.name) throw new HttpError(400, "A glaze needs a brand and a name.");
-  g.createdAt = prev?.createdAt || Date.now();
-  return g;
-}
-function cleanPhoto(p) {
-  if (!p) return null;
-  if (!isPhotoId(p.id) || !q.photo.get(p.id)) throw new HttpError(400, "That photo upload wasn't found. Try adding it again.");
-  return { id: p.id };
-}
-function cleanLog(b, prev) {
-  const glazes = (Array.isArray(b.glazes) ? b.glazes : []).slice(0, 50).map((x) => ({
-    glazeId: str(x?.glazeId, 100), application: str(x?.application),
-    name: str(x?.name, 200), brand: str(x?.brand, 200), type: str(x?.type, 200),
-    color: isColor(x?.color) ? x.color : "",
-  })).filter((x) => x.glazeId);
-  return {
-    kind: b.kind === "piece" ? "piece" : "tile",
-    title: str(b.title, 300),
-    date: /^\d{4}-\d{2}-\d{2}$/.test(b.date) ? b.date : new Date().toISOString().slice(0, 10),
-    clay: str(b.clay, 200),
-    firing: str(b.firing, 300),
-    glazes,
-    notes: str(b.notes, 20000),
-    pre: cleanPhoto(b.pre),
-    post: cleanPhoto(b.post),
-    createdAt: prev?.createdAt || Date.now(),
-    updatedAt: Date.now(),
-  };
-}
-
-// ---------- photos ----------
-async function saveRemoteImage(imageUrl) {
-  if (!imageUrl) return { image: null, imageNote: "No product image was found." };
-  try {
-    const { type, buf } = await fetchImage(imageUrl);
-    if (PHOTO_TYPES[type] && buf.length) return { image: { id: storePhoto(type, buf) }, imageNote: "" };
-    return { image: null, imageNote: "The product image is in a format the journal can't store." };
-  } catch (e) { return { image: null, imageNote: e.message || "Couldn't download the product image." }; }
-}
-function referencedPhotoIds() {
-  const ids = new Set();
-  for (const l of listDocs("logs")) { if (l.pre?.id) ids.add(l.pre.id); if (l.post?.id) ids.add(l.post.id); }
-  for (const g of listDocs("glazes")) if (g.image?.id) ids.add(g.image.id);
-  return ids;
-}
-function storePhoto(type, buf) {
-  const id = crypto.randomBytes(16).toString("hex");
-  fs.writeFileSync(path.join(PHOTO_DIR, id + PHOTO_TYPES[type]), buf);
-  q.addPhoto.run(id, type, buf.length, Date.now());
+const isSealed = (v) => typeof v === "string" && v.length <= MAX_JSON_BYTES && /^[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]+$/.test(v);
+function cleanPhoto(id, uid) {
+  if (!isPhotoId(id) || q.photo.get(id)?.user_id !== uid) throw new HttpError(400, "That photo upload wasn't found. Try adding it again.");
   return id;
 }
-const photoIdsOf = (coll, doc) => (coll === "logs" ? [doc?.pre?.id, doc?.post?.id] : [doc?.image?.id]);
+// A stored record: the browser's ciphertext plus the IDs of the photos it uses, so unused photos can be cleaned up.
+function cleanRecord(b, uid) {
+  if (!isSealed(b.enc)) throw new HttpError(400, "Expected an encrypted record.");
+  const photos = [...new Set(Array.isArray(b.photos) ? b.photos : [])];
+  if (photos.length > 3) throw new HttpError(400, "Too many photos.");
+  return { enc: b.enc, photos: photos.map((id) => cleanPhoto(id, uid)) };
+}
+// Photo IDs a stored record uses: encrypted records list them; unencrypted ones from before encryption hold them inline.
+const photoRefs = (d) => (Array.isArray(d?.photos) ? d.photos : [d?.pre?.id, d?.post?.id, d?.image?.id].filter(Boolean));
+// What the browser gets: ciphertext, or an unencrypted record from before encryption for it to encrypt.
+const forClient = (id, d) => (typeof d.enc === "string" ? { id, enc: d.enc } : { id, legacy: d });
+
+// ---------- photos ----------
+// Download a product image for the browser, which encrypts it and uploads it like any other photo.
+async function remoteImage(imageUrl) {
+  if (!imageUrl) return { imageData: null, imageNote: "No product image was found." };
+  try {
+    const { type, buf } = await fetchImage(imageUrl);
+    if (PHOTO_TYPES[type] && type !== ENCRYPTED && buf.length) return { imageData: buf.toString("base64"), imageType: type, imageNote: "" };
+    return { imageData: null, imageNote: "The product image is in a format the journal can't store." };
+  } catch (e) { return { imageData: null, imageNote: e.message || "Couldn't download the product image." }; }
+}
+// Photo IDs are random and unique across all journals, so one global set is enough.
+function referencedPhotoIds() {
+  const ids = new Set();
+  for (const { data } of q.allPhotoRefs.all()) for (const id of photoRefs(JSON.parse(data))) ids.add(id);
+  return ids;
+}
+function storePhoto(type, buf, uid) {
+  const id = crypto.randomBytes(16).toString("hex");
+  fs.writeFileSync(path.join(PHOTO_DIR, id + PHOTO_TYPES[type]), buf);
+  q.addPhoto.run(id, type, buf.length, Date.now(), uid);
+  return id;
+}
 function deletePhoto(id, type) {
   q.delPhoto.run(id);
   fs.rm(path.join(PHOTO_DIR, id + (PHOTO_TYPES[type] || "")), { force: true }, () => {});
@@ -146,8 +182,44 @@ function sweepOrphans() {
   const used = referencedPhotoIds();
   for (const r of q.oldPhotos.all(Date.now() - 24 * 3600 * 1000)) if (!used.has(r.id)) deletePhoto(r.id, r.type);
 }
-sweepOrphans();
-setInterval(sweepOrphans, 6 * 3600 * 1000).unref();
+function sweep() {
+  sweepOrphans();
+  q.oldSessions.run(Date.now() - SESSION_DAYS * 86400 * 1000);
+}
+sweep();
+setInterval(sweep, 6 * 3600 * 1000).unref();
+
+// ---------- accounts & sessions ----------
+// The session cookie holds a random token; the database stores only its SHA-256.
+const tokenHash = (t) => crypto.createHash("sha256").update(t).digest("hex");
+function parseCookies(header = "") {
+  const out = {};
+  for (const part of header.split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0) try { out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch {}
+  }
+  return out;
+}
+function sessionUser(req) {
+  const { sid } = parseCookies(req.headers.cookie);
+  if (!sid) return null;
+  return q.session.get(tokenHash(sid), Date.now() - SESSION_DAYS * 86400 * 1000)?.user_id ?? null;
+}
+function newSessionCookie(uid) {
+  const token = crypto.randomBytes(32).toString("base64url");
+  q.addSession.run(tokenHash(token), uid, Date.now());
+  return `sid=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_DAYS * 86400}${SECURE_COOKIE}`;
+}
+// Find or create the account for a verified identity, and hand it any unclaimed (pre-sign-in) journal.
+function accountFor(sub) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const uid = q.userBySub.get(sub)?.id ?? Number(q.addUser.run(sub, crypto.randomUUID(), Date.now()).lastInsertRowid);
+    if (OWNER_SUB ? sub === OWNER_SUB : uid === q.firstUser.get().id) { q.claimDocs.run(uid); q.claimPhotos.run(uid); }
+    db.exec("COMMIT");
+    return uid;
+  } catch (e) { db.exec("ROLLBACK"); throw e; }
+}
 
 // ---------- http helpers ----------
 const SECURITY_HEADERS = {
@@ -179,14 +251,6 @@ async function readJson(req) {
     return v;
   } catch (e) { if (e instanceof HttpError) throw e; throw new HttpError(400, "Request body must be a JSON object."); }
 }
-const sha = (s) => crypto.createHash("sha256").update(s).digest();
-function authorized(req) {
-  if (!PASSWORD) return true;
-  const m = /^Basic (.+)$/.exec(req.headers.authorization || "");
-  if (!m) return false;
-  const pass = Buffer.from(m[1], "base64").toString("utf8").split(":").slice(1).join(":");
-  return crypto.timingSafeEqual(sha(pass), sha(PASSWORD));
-}
 
 function serveStatic(res, urlPath) {
   const rel = urlPath === "/" ? "/index.html" : urlPath;
@@ -204,44 +268,93 @@ async function handle(req, res) {
   const url = new URL(req.url, "http://localhost");
   const p = url.pathname;
 
-  if (!PUBLIC_UNAUTHED.has(p) && !authorized(req)) {
-    return send(res, 401, { error: "Password required" }, { "WWW-Authenticate": 'Basic realm="Glaze Journal", charset="UTF-8"' });
+  // State changes only from this app's own pages. (The session cookie is SameSite=Lax as well.)
+  const site = req.headers["sec-fetch-site"];
+  if (!["GET", "HEAD"].includes(req.method) && site && site !== "same-origin" && site !== "none") {
+    throw new HttpError(403, "Cross-site requests aren't allowed.");
   }
 
   if (p === "/healthz") return send(res, 200, { ok: true });
 
+  // ---------- sign-in (no session needed) ----------
+  if (p === "/api/config" && req.method === "GET") return send(res, 200, { idOrigin: ID.origin, idApp: ID.app });
+
+  // The browser came back from ID_ORIGIN/authorize with a signed token for the nonce it made.
+  if (p === "/api/id/login" && req.method === "POST") {
+    const body = await readJson(req);
+    let claims;
+    try {
+      claims = await verifyIdToken(body.token, { issuer: ID.origin, audience: ID.app, nonce: body.nonce, jwksUrl: ID.jwksUrl });
+    } catch (e) {
+      if (e instanceof IdTokenError) throw new HttpError(401, e.message);
+      console.error(e);
+      throw new HttpError(502, "Couldn't reach the 6j0.org identity server. Please try again.");
+    }
+    const uid = accountFor(claims.sub), u = q.user.get(uid);
+    return send(res, 200, { guid: u.guid, wrappedKey: u.wrapped_key }, { "Set-Cookie": newSessionCookie(uid), "Cache-Control": "no-store" });
+  }
+
+  if (p === "/api/logout" && req.method === "POST") {
+    const { sid } = parseCookies(req.headers.cookie);
+    if (sid) q.delSession.run(tokenHash(sid));
+    return send(res, 200, { ok: true }, { "Set-Cookie": `sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${SECURE_COOKIE}` });
+  }
+
+  // The page and its scripts load without a session; it shows a sign-in screen when the API says 401.
+  if (!p.startsWith("/api/") && !p.startsWith("/photos/")) {
+    if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, { error: "Method not allowed" });
+    return serveStatic(res, p);
+  }
+
+  // ---------- everything below needs a session and only sees that account's journal ----------
+  const uid = sessionUser(req);
+  if (uid === null) return send(res, 401, { error: "Please sign in." }, { "Cache-Control": "no-store" });
+
+  // The journal key, wrapped in the browser. Set once, on the account's first sign-in.
+  if (p === "/api/key" && req.method === "PUT") {
+    const { wrappedKey } = await readJson(req);
+    if (!isSealed(wrappedKey) || wrappedKey.length > 200) throw new HttpError(400, "Bad wrapped key.");
+    if (!q.setKey.run(wrappedKey, uid).changes) throw new HttpError(409, "This account already has a journal key.");
+    return send(res, 200, { ok: true });
+  }
+
   if (p === "/api/state" && req.method === "GET") {
-    return send(res, 200, { lists: getDoc("config", "lists") || DEFAULT_LISTS, glazes: listDocs("glazes"), logs: listDocs("logs") }, { "Cache-Control": "no-store" });
+    const u = q.user.get(uid), lists = getDoc(uid, "config", "lists");
+    return send(res, 200, {
+      guid: u.guid, wrappedKey: u.wrapped_key,
+      lists: lists ? forClient("lists", lists) : null,
+      glazes: listDocs(uid, "glazes").map(({ id, ...d }) => forClient(id, d)),
+      logs: listDocs(uid, "logs").map(({ id, ...d }) => forClient(id, d)),
+    }, { "Cache-Control": "no-store" });
   }
 
   if (p === "/api/lists" && req.method === "PUT") {
-    const lists = cleanLists(await readJson(req));
-    q.put.run("config", "lists", JSON.stringify(lists));
-    return send(res, 200, lists);
+    const b = await readJson(req);
+    if (!isSealed(b.enc)) throw new HttpError(400, "Expected an encrypted record.");
+    const prev = getDoc(uid, "config", "lists");
+    q.put.run(uid, "config", "lists", JSON.stringify({ enc: b.enc }));
+    if (prev && typeof prev.enc !== "string") db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    return send(res, 200, { ok: true });
   }
 
-  let m = /^\/api\/(glazes|logs)(?:\/([A-Za-z0-9_-]{1,64}))?$/.exec(p);
+  // Records are created and updated with PUT; the browser picks the ID, since the ID is part of the encryption.
+  let m = /^\/api\/(glazes|logs)\/([A-Za-z0-9_-]{1,64})$/.exec(p);
   if (m) {
     const [, coll, id] = m;
-    const clean = coll === "glazes" ? cleanGlaze : cleanLog;
-    if (!id && req.method === "POST") {
-      const newId = crypto.randomUUID();
-      const doc = clean(await readJson(req), null);
-      q.put.run(coll, newId, JSON.stringify(doc));
-      return send(res, 201, { id: newId, ...doc });
+    if (req.method === "PUT") {
+      const prev = getDoc(uid, coll, id);
+      const doc = cleanRecord(await readJson(req), uid);
+      q.put.run(uid, coll, id, JSON.stringify(doc));
+      if (prev) dropUnreferenced(photoRefs(prev));
+      // Replacing an unencrypted record from before encryption: don't leave its old copy in the write-ahead log.
+      // (secure_delete zeroes it in the database file itself.)
+      if (prev && typeof prev.enc !== "string") db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      return send(res, 200, { id });
     }
-    if (id && req.method === "PUT") {
-      const prev = getDoc(coll, id);
-      if (!prev) throw new HttpError(404, "That record no longer exists.");
-      const doc = clean(await readJson(req), prev);
-      q.put.run(coll, id, JSON.stringify(doc));
-      dropUnreferenced(photoIdsOf(coll, prev));
-      return send(res, 200, { id, ...doc });
-    }
-    if (id && req.method === "DELETE") {
-      const prev = getDoc(coll, id);
-      q.del.run(coll, id);
-      if (prev) dropUnreferenced(photoIdsOf(coll, prev));
+    if (req.method === "DELETE") {
+      const prev = getDoc(uid, coll, id);
+      q.del.run(uid, coll, id);
+      if (prev) dropUnreferenced(photoRefs(prev));
       return send(res, 204);
     }
     return send(res, 405, { error: "Method not allowed" });
@@ -249,18 +362,17 @@ async function handle(req, res) {
 
   if (p === "/api/photos" && req.method === "POST") {
     const type = (req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
-    if (!PHOTO_TYPES[type]) throw new HttpError(415, "Photos must be JPEG, PNG, WebP, GIF, HEIC or AVIF.");
+    if (type !== ENCRYPTED) throw new HttpError(415, "Photos must be encrypted (application/octet-stream).");
     const buf = await readBody(req, MAX_PHOTO_BYTES);
     if (!buf.length) throw new HttpError(400, "The photo was empty.");
-    return send(res, 201, { id: storePhoto(type, buf) });
+    return send(res, 201, { id: storePhoto(type, buf, uid) });
   }
 
   // Read a manufacturer's product page and save its image locally.
   if (p === "/api/import" && req.method === "POST") {
     const { url: productUrl } = await readJson(req);
-    const found = await importProduct(productUrl);
-    const { image, imageNote } = await saveRemoteImage(found.imageUrl);
-    return send(res, 200, { ...found, image, imageNote });
+    const { imageUrl, ...found } = await importProduct(productUrl);
+    return send(res, 200, { ...found, ...(await remoteImage(imageUrl)) });
   }
 
   // Manufacturer catalogs: sources -> product lines -> glazes.
@@ -279,26 +391,23 @@ async function handle(req, res) {
   if (p === "/api/catalog/item" && req.method === "POST") {
     const { item } = await readJson(req);
     const full = await completeItem(item);
-    const { image, imageNote } = await saveRemoteImage(full.image);
     return send(res, 200, {
       brand: str(full.brand, 200), line: str(full.line, 200), code: str(full.code, 40), name: str(full.name, 200),
-      description: str(full.description, 2000), sourceUrl: str(full.url, 2000), image, imageNote,
+      description: str(full.description, 2000), sourceUrl: str(full.url, 2000), ...(await remoteImage(full.image)),
     });
   }
 
   m = /^\/photos\/([0-9a-f]{32})$/.exec(p);
   if (m && req.method === "GET") {
     const row = q.photo.get(m[1]);
-    if (!row) return send(res, 404, { error: "Not found" });
+    if (!row || row.user_id !== uid) return send(res, 404, { error: "Not found" });
     return fs.readFile(path.join(PHOTO_DIR, m[1] + PHOTO_TYPES[row.type]), (err, buf) => {
       if (err) return send(res, 404, { error: "Not found" });
       send(res, 200, buf, { "Content-Type": row.type, "Cache-Control": "private, max-age=31536000, immutable" });
     });
   }
 
-  if (p.startsWith("/api/")) return send(res, 404, { error: "Not found" });
-  if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, { error: "Method not allowed" });
-  return serveStatic(res, p);
+  return send(res, 404, { error: "Not found" });
 }
 
 http.createServer((req, res) => {
@@ -307,5 +416,5 @@ http.createServer((req, res) => {
     if (!res.headersSent) send(res, err.status || 500, { error: err.status ? err.message : "Something went wrong on the server." });
   });
 }).listen(PORT, HOST, () => {
-  console.log(`Glaze Journal on http://${HOST}:${PORT}  (data: ${DATA_DIR}${PASSWORD ? ", password on" : ", no password"})`);
+  console.log(`Glaze Journal on http://${HOST}:${PORT}  (data: ${DATA_DIR}, sign-in: ${ID.origin} as "${ID.app}")`);
 });

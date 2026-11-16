@@ -208,6 +208,8 @@ textarea { resize: vertical; min-height: 64px; }
 .applied .how { color: var(--muted); font-size: .9rem; white-space: pre-wrap; }
 .notes { white-space: pre-wrap; background: var(--bg); border-radius: var(--r); padding: 12px 14px; margin: 0; }
 .loading { color: var(--muted); padding: 40px 0; text-align: center; }
+.signin { max-width: 520px; margin: 40px auto 0; background: var(--surface); border-style: solid; }
+.signin .err { color: var(--danger); }
 @media (max-width: 520px) { .view-head h2 { font-size: 1.4rem; } .dl { grid-template-columns: 1fr; } .dl dt { margin-top: 6px; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -220,11 +222,12 @@ textarea { resize: vertical; min-height: 64px; }
       <svg viewBox="0 0 60 80" aria-hidden="true" id="logoTile"></svg>
       <h1>Glaze Journal</h1>
     </div>
-    <nav class="tabs" aria-label="Sections">
+    <nav class="tabs" aria-label="Sections" hidden>
       <a href="#log" data-view="log">Firing log</a>
       <a href="#glazes" data-view="glazes">Glazes</a>
       <a href="#lists" data-view="lists">Lists</a>
     </nav>
+    <button type="button" class="btn small" id="signOut" hidden>Sign out</button>
   </div>
 </header>
 
@@ -360,6 +363,6 @@ textarea { resize: vertical; min-height: 64px; }
   </form>
 </dialog>
 
-<script src="/app.js"></script>
+<script type="module" src="/app.js"></script>
 </body>
 </html>

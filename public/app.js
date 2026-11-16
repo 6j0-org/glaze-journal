@@ -1,3 +1,7 @@
+import {
+  loadKey, clearKey, encryptRecord, decryptRecord, encryptPhoto, decryptPhoto, startIdSignIn, finishIdSignIn, hasIdCallback,
+} from "/secure.js";
+
 (() => {
   const DEFAULTS = {
     brands: ["Mayco", "Amaco", "Freeform", "Velvet Underglaze"],
@@ -12,6 +16,8 @@
     filter: { kind: "all", glaze: "", clay: "" },
     glazeFilter: "",
     canUpload: true,
+    auth: "unknown", // "unknown" | "in" | "out" | "locked" (signed in, but this device doesn't have the journal key)
+    authError: "",
   };
   let store = null;
 
@@ -24,7 +30,36 @@
   const glazeById = (id) => state.glazes.find((g) => g.id === id);
   const glazeLabel = (g) => g ? `${g.brand} · ${g.code ? g.code + " " : ""}${g.name}` : "Deleted glaze";
   const byText = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" });
-  function photoUrl(p) { if (!p) return ""; return p.id ? "/photos/" + p.id : ""; }
+  // ---------- photos (encrypted on the server; decrypted here into blob: URLs) ----------
+  // photoImg() draws a placeholder right away and fills in every <img data-pid> for that photo once it's decrypted.
+  const BLANK = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+  const photoCache = new Map(); // id -> { url, promise }
+  function loadPhoto(id) {
+    const entry = { url: "" };
+    entry.promise = (async () => {
+      const r = await fetch("/photos/" + encodeURIComponent(id));
+      if (!r.ok) throw new Error("photo " + r.status);
+      const type = r.headers.get("content-type") || "";
+      const buf = await r.arrayBuffer();
+      // Photos from before encryption come back as plain images until their owner's browser re-encrypts them.
+      const blob = type.startsWith("application/octet-stream") ? await decryptPhoto(buf) : new Blob([buf], { type });
+      entry.url = URL.createObjectURL(blob);
+      document.querySelectorAll(`img[data-pid="${CSS.escape(id)}"]`).forEach((img) => { img.src = entry.url; });
+      return entry.url;
+    })().catch(() => ""); // a failed photo stays a placeholder until the next page load
+    photoCache.set(id, entry);
+    return entry.promise;
+  }
+  function photoSrc(p) {
+    if (!p?.id) return "";
+    const c = photoCache.get(p.id);
+    if (!c) loadPhoto(p.id);
+    return c?.url || BLANK;
+  }
+  const photoUrl = async (p) => (!p?.id ? "" : photoCache.get(p.id)?.url || (await (photoCache.get(p.id)?.promise || loadPhoto(p.id))));
+  const photoImg = (p, attrs = "") => `<img data-pid="${esc(p.id)}" src="${esc(photoSrc(p))}" ${attrs}>`;
+  function seedPhoto(id, blob) { const url = URL.createObjectURL(blob); photoCache.set(id, { url, promise: Promise.resolve(url) }); }
+  function clearPhotos() { for (const c of photoCache.values()) if (c.url) URL.revokeObjectURL(c.url); photoCache.clear(); }
   function resolveGlaze(item) {
     const g = glazeById(item.glazeId);
     return g ? { ...g, live: true } : { name: item.name || "Deleted glaze", brand: item.brand || "", type: item.type || "", color: item.color || "#999999", live: false };
@@ -44,39 +79,106 @@
   $("#logoTile").innerHTML = tileSvg("#2f6f60", "Fluid");
 
   // ---------- storage ----------
+  // JSON (or raw bytes with a type) to the API. Errors carry .status. A 401 means the session ended.
+  async function api(method, url, body, type) {
+    const opts = { method, headers: {} };
+    if (body !== undefined) { opts.headers["Content-Type"] = type || "application/json"; opts.body = type ? body : JSON.stringify(body); }
+    let r;
+    try { r = await fetch(url, opts); } catch { throw new Error("can't reach the server. Check your connection."); }
+    if (!r.ok) {
+      let msg = r.statusText; try { msg = (await r.json()).error || msg; } catch {}
+      if (r.status === 401 && !url.startsWith("/api/id/")) signedOut();
+      throw Object.assign(new Error(msg), { status: r.status });
+    }
+    return r.status === 204 ? null : r.json();
+  }
+
+  // Everything in the journal is encrypted in this browser before it's sent (see secure.js). The server keeps the
+  // ciphertext, plus which photos each record uses so it can delete photos nothing uses any more.
   function apiStore() {
     const subs = { glazes: [], logs: [], config: [] };
-    let snap = null;
-    async function api(method, url, body, type) {
-      const opts = { method, headers: {} };
-      if (body !== undefined) { opts.headers["Content-Type"] = type || "application/json"; opts.body = type ? body : JSON.stringify(body); }
-      let r;
-      try { r = await fetch(url, opts); } catch { throw new Error("can't reach the server. Check your connection."); }
-      if (!r.ok) { let msg = r.statusText; try { msg = (await r.json()).error || msg; } catch {} throw new Error(msg); }
-      return r.status === 204 ? null : r.json();
-    }
+    let snap = null, upgrading = false;
     function emit() {
       subs.config.forEach((f) => f(snap.lists));
       subs.glazes.forEach((f) => f(snap.glazes));
       subs.logs.forEach((f) => f(snap.logs));
     }
+    const photoIds = (c, doc) => (c === "logs" ? [doc.pre?.id, doc.post?.id] : c === "glazes" ? [doc.image?.id] : []).filter(Boolean);
+    async function putRecord(c, id, doc) {
+      if (c === "config") return api("PUT", "/api/lists", { enc: await encryptRecord("config", "lists", doc) });
+      return api("PUT", `/api/${c}/${encodeURIComponent(id)}`, { enc: await encryptRecord(c, id, doc), photos: photoIds(c, doc) });
+    }
+    async function upload(blob) {
+      const r = await api("POST", "/api/photos", await encryptPhoto(blob), "application/octet-stream");
+      seedPhoto(r.id, blob);
+      return { id: r.id };
+    }
+    // Product images come back from the server as plain bytes; encrypt and store them like any other photo.
+    async function withImage(r) {
+      const { imageData, imageType, ...rest } = r;
+      if (!imageData) return { ...rest, image: null };
+      const bytes = Uint8Array.from(atob(imageData), (ch) => ch.charCodeAt(0));
+      return { ...rest, image: await upload(new Blob([bytes], { type: imageType })) };
+    }
+    async function decryptState(raw) {
+      const legacy = []; let bad = 0;
+      const one = async (c, r) => {
+        if (r.legacy) { legacy.push({ c, id: r.id, doc: r.legacy }); return { id: r.id, ...r.legacy }; }
+        try { return { id: r.id, ...(await decryptRecord(c, r.id, r.enc)) }; } catch { bad++; return null; }
+      };
+      const lists = raw.lists ? await one("config", raw.lists) : null;
+      if (lists) delete lists.id;
+      const glazes = (await Promise.all(raw.glazes.map((r) => one("glazes", r)))).filter(Boolean);
+      const logs = (await Promise.all(raw.logs.map((r) => one("logs", r)))).filter(Boolean);
+      return { lists, glazes, logs, legacy, bad };
+    }
+    // Records (and their photos) from before encryption: encrypt them once, then drop the plain copies.
+    async function upgradeLegacy(items) {
+      upgrading = true;
+      try {
+        for (const { c, id, doc } of items) {
+          const next = { ...doc };
+          for (const k of ["pre", "post", "image"]) {
+            if (!next[k]?.id) continue;
+            const r = await fetch("/photos/" + encodeURIComponent(next[k].id));
+            next[k] = r.ok ? await upload(await r.blob()) : null;
+          }
+          await putRecord(c, id, next);
+        }
+      } finally { upgrading = false; }
+    }
     return {
       async refresh() {
-        try { snap = await api("GET", "/api/state"); showBanner(""); emit(); }
-        catch { showBanner("Can't reach the Glaze Journal server. Check your connection; the page will retry."); }
+        try {
+          const raw = await api("GET", "/api/state");
+          if (!raw.wrappedKey || !(await loadKey(raw.guid))) { locked(); return; }
+          snap = await decryptState(raw);
+          state.auth = "in"; showAuthUi();
+          showBanner(snap.bad ? `${snap.bad} record${snap.bad === 1 ? "" : "s"} couldn't be decrypted with this account's key and ${snap.bad === 1 ? "is" : "are"} hidden.` : "");
+          emit();
+          if (snap.legacy.length && !upgrading) {
+            showBanner("Encrypting your existing journal…");
+            try { await upgradeLegacy(snap.legacy); await this.refresh(); }
+            catch (e) { showBanner("Couldn't finish encrypting your existing journal: " + (e?.message || "try again later.")); }
+          }
+        } catch (e) { if (e.status !== 401) showBanner("Can't reach the Glaze Journal server. Check your connection; the page will retry."); }
       },
       watch(c, cb) { subs[c].push(cb); if (snap) cb(c === "config" ? snap.lists : snap[c]); },
+      // The browser picks record IDs: each ID is bound into its record's encryption.
       async save(c, id, d, opts = {}) {
-        const r = await api(id ? "PUT" : "POST", `/api/${c}` + (id ? "/" + encodeURIComponent(id) : ""), d);
+        id = id || crypto.randomUUID();
+        const prev = snap?.[c]?.find((x) => x.id === id);
+        const { id: _, ...doc } = { ...d, createdAt: prev?.createdAt || d.createdAt || Date.now(), ...(c === "logs" ? { updatedAt: Date.now() } : {}) };
+        await putRecord(c, id, doc);
         if (opts.refresh !== false) await this.refresh();
-        return r.id;
+        return id;
       },
       get: (url) => api("GET", url),
-      post: (url, body) => api("POST", url, body),
+      async catalogItem(item) { return withImage(await api("POST", "/api/catalog/item", { item })); },
       async remove(c, id) { await api("DELETE", `/api/${c}/` + encodeURIComponent(id)); await this.refresh(); },
-      async saveConfig(d) { await api("PUT", "/api/lists", d); await this.refresh(); },
-      async upload(blob) { return api("POST", "/api/photos", blob, blob.type || "image/jpeg"); },
-      async importPage(url) { return api("POST", "/api/import", { url }); },
+      async saveConfig(d) { await putRecord("config", "lists", d); await this.refresh(); },
+      upload,
+      async importPage(url) { return withImage(await api("POST", "/api/import", { url })); },
       async deleteAsset() {}, // the server removes photos no entry uses any more
     };
   }
@@ -90,6 +192,42 @@
       c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
       return await new Promise((res) => c.toBlob((b) => res(b || file), "image/jpeg", 0.85));
     } catch { return file; }
+  }
+
+  // ---------- sign-in with a 6j0.org identity (the handoff and keys are in secure.js) ----------
+  async function startSignIn() {
+    const r = await fetch("/api/config");
+    if (!r.ok) throw new Error("Can't reach the Glaze Journal server.");
+    await startIdSignIn(await r.json());
+  }
+
+  async function signOut() {
+    try { await fetch("/api/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); } catch {}
+    signedOut();
+  }
+
+  function forget() {
+    state.glazes = []; state.logs = []; state.lists = clone(DEFAULTS);
+    clearPhotos(); clearKey();
+    document.querySelectorAll("dialog[open]").forEach((d) => d.close());
+    showBanner(""); showAuthUi(); render();
+  }
+  function signedOut() { if (state.auth !== "out") { state.auth = "out"; forget(); } }
+  // Signed in, but this device has no journal key (e.g. the browser cleared site storage): sign in again for it.
+  function locked() { if (state.auth !== "locked") { state.auth = "locked"; forget(); } }
+
+  function showAuthUi() {
+    $("nav.tabs").hidden = state.auth !== "in";
+    $("#signOut").hidden = state.auth !== "in" && state.auth !== "locked";
+  }
+
+  function renderSignIn() {
+    const intro = state.auth === "locked"
+      ? `<h3>Unlock your journal</h3><p>This device doesn't have your journal's key any more. Sign in again to unlock it.</p>`
+      : `<h3>Sign in to your journal</h3><p>Glaze Journal uses your 6j0.org identity: one passkey (or username and password) for every 6j0.org app. Your glazes, firing log, and photos are encrypted in your browser, so only you can read them.</p>`;
+    return `<div class="empty signin">${intro}
+      <button class="btn primary" data-act="sign-in">Sign in with 6j0.org</button>
+      <p class="meta err" id="signInErr"${state.authError ? "" : " hidden"}>${esc(state.authError)}</p></div>`;
   }
 
   function showBanner(text) { const b = $("#banner"); b.textContent = text; b.hidden = !text; }
@@ -113,7 +251,8 @@
   // ---------- rendering ----------
   function render() {
     const v = $("#view");
-    if (!store) { v.innerHTML = `<p class="loading">Opening the studio…</p>`; return; }
+    if (state.auth === "out" || state.auth === "locked") { v.innerHTML = renderSignIn(); return; }
+    if (!store || state.auth !== "in") { v.innerHTML = `<p class="loading">Opening the studio…</p>`; return; }
     const active = document.activeElement, focusId = v.contains(active) ? active.id : "";
     const caret = focusId && active.selectionStart != null ? [active.selectionStart, active.selectionEnd] : null;
     if (state.view === "log") v.innerHTML = renderLog();
@@ -156,13 +295,12 @@
   }
 
   function logCard(l) {
-    const post = photoUrl(l.post), pre = photoUrl(l.pre);
-    const img = post || pre;
+    const img = l.post?.id ? l.post : l.pre?.id ? l.pre : null;
     const glazes = (l.glazes || []).map(resolveGlaze);
     return `<button class="card" data-log="${esc(l.id)}">
-      <div class="photo">${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : "No photo yet"}
+      <div class="photo">${img ? photoImg(img, 'alt=""') : "No photo yet"}
         <span class="kind">${l.kind === "piece" ? "Piece" : "Test tile"}</span>
-        ${img ? `<span class="stage">${post ? "After firing" : "Before firing"}</span>` : ""}</div>
+        ${img ? `<span class="stage">${img === l.post ? "After firing" : "Before firing"}</span>` : ""}</div>
       <div class="card-body">
         <h3>${esc(l.title || (l.kind === "piece" ? "Untitled piece" : "Untitled tile"))}</h3>
         <div class="meta">${esc([fmtDate(l.date), l.clay].filter(Boolean).join(" · "))}</div>
@@ -183,7 +321,7 @@
     const byCode = (x, y) => (x.code || "~").localeCompare(y.code || "~", undefined, { numeric: true }) || byText(x.name, y.name);
     const card = (g) => {
       const n = usageCount("glaze", g.id);
-      const thumb = g.image?.id ? `<div class="thumbwrap"><img class="gthumb" src="${esc(photoUrl(g.image))}" alt="" loading="lazy"><i class="dot" style="background:${esc(g.color)}"></i></div>` : `<svg viewBox="0 0 60 80" aria-hidden="true">${tileSvg(g.color, g.type)}</svg>`;
+      const thumb = g.image?.id ? `<div class="thumbwrap">${photoImg(g.image, 'class="gthumb" alt=""')}<i class="dot" style="background:${esc(g.color)}"></i></div>` : `<svg viewBox="0 0 60 80" aria-hidden="true">${tileSvg(g.color, g.type)}</svg>`;
       return `<button class="glaze-card" data-glaze="${esc(g.id)}">${thumb}<div>${g.code ? `<div class="gcode">${esc(g.code)}</div>` : ""}<div class="gname">${esc(g.name)}</div><div class="gsub"><span class="pill">${esc(g.type || "No type yet")}</span></div><div class="gsub" style="margin-top:4px">${n ? `${n} entr${n === 1 ? "y" : "ies"}` : "Not used yet"}</div></div></button>`;
     };
     const brands = [...new Set(shown.map((g) => g.brand))].sort(byText);
@@ -211,7 +349,11 @@
   $("#view").addEventListener("click", (e) => {
     const t = e.target.closest("button, a");
     if (!t) return;
-    if (t.dataset.act === "new-log") openLogForm(null);
+    if (t.dataset.act === "sign-in") {
+      t.disabled = true;
+      startSignIn().catch((err) => { t.disabled = false; state.authError = err.message || "Couldn't start sign-in."; render(); });
+    }
+    else if (t.dataset.act === "new-log") openLogForm(null);
     else if (t.dataset.act === "new-glaze") openGlazeForm(null);
     else if (t.dataset.act === "import-glazes") openImport();
     else if (t.dataset.act === "browse-catalogs") openCatalog();
@@ -358,10 +500,10 @@
     const s = $("#gfFetchStatus"); s.textContent = text; s.hidden = !text; s.classList.toggle("err", !!err);
   }
   function renderGlazeImage() {
-    const url = photoUrl(glazeDraft.image);
-    $("#gfImageField").hidden = !url;
-    $("#gfPick").hidden = !url;
-    if (url) $("#gfImage").src = url;
+    const has = Boolean(glazeDraft.image?.id);
+    $("#gfImageField").hidden = !has;
+    $("#gfPick").hidden = !has;
+    if (has) { $("#gfImage").dataset.pid = glazeDraft.image.id; $("#gfImage").src = photoSrc(glazeDraft.image); }
     const src = $("#gfSource");
     src.hidden = !glazeDraft.sourceUrl;
     if (glazeDraft.sourceUrl) {
@@ -415,7 +557,7 @@
       if (r.description) $("#gfDesc").value = r.description;
       glazeDraft = { image: r.image || glazeDraft.image, sourceUrl: r.sourceUrl || url };
       renderGlazeImage();
-      const color = await colorFromImage(photoUrl(r.image));
+      const color = await colorFromImage(await photoUrl(r.image));
       if (color) $("#gfColor").value = color;
       updateGlazePreview();
       const missing = [];
@@ -428,7 +570,7 @@
   });
   $("#gfUrl").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("#gfFetch").click(); } });
   $("#gfPick").addEventListener("click", async () => {
-    const color = await colorFromImage(photoUrl(glazeDraft.image));
+    const color = await colorFromImage(await photoUrl(glazeDraft.image));
     if (color) { $("#gfColor").value = color; updateGlazePreview(); }
   });
   $("#gfImageRemove").addEventListener("click", () => { glazeDraft.image = null; renderGlazeImage(); });
@@ -541,8 +683,8 @@
         const it = queue.shift();
         it.status = "busy"; renderCatalogItems();
         try {
-          const r = await store.post("/api/catalog/item", { item: it });
-          const color = (await colorFromImage(photoUrl(r.image))) || "#888888";
+          const r = await store.catalogItem(it);
+          const color = (await colorFromImage(await photoUrl(r.image))) || "#888888";
           await store.save("glazes", null, { brand: r.brand || it.brand, line: r.line, code: r.code, name: r.name || it.name, type, color, description: r.description, image: r.image, sourceUrl: r.sourceUrl, createdAt: Date.now() }, { refresh: false });
           newBrands.add(r.brand || it.brand);
           it.status = "ok"; it.selected = false; added++;
@@ -590,7 +732,7 @@
         const dup = state.glazes.find((g) => g.brand.toLowerCase() === (r.brand || "").toLowerCase() &&
           (r.code ? (g.code || "").toUpperCase() === r.code : g.name.toLowerCase() === r.name.toLowerCase()));
         if (dup) { skipped++; done("–", `Already in catalog: ${esc(glazeLabel(dup))}`); continue; }
-        const color = (await colorFromImage(photoUrl(r.image))) || "#888888";
+        const color = (await colorFromImage(await photoUrl(r.image))) || "#888888";
         await store.save("glazes", null, { brand: r.brand || "Unknown", name: r.name, code: r.code, type, color, description: r.description, image: r.image, sourceUrl: r.sourceUrl, createdAt: Date.now() });
         ensureInList("brands", r.brand);
         added++;
@@ -642,9 +784,9 @@
   });
 
   function photoField(key, label, existing) {
-    const url = photoUrl(existing);
+    const url = Boolean(existing?.id);
     return `<div class="field"><span class="label">${label}</span>
-      <label class="drop" id="drop-${key}">${url ? `<img src="${esc(url)}" alt="">` : ""}
+      <label class="drop" id="drop-${key}">${url ? photoImg(existing, 'alt=""') : ""}
         <span>${url ? "" : "Add photo<br><small>Tap to choose or take one</small>"}</span>
         <input type="file" accept="image/*" id="file-${key}" data-photo="${key}">
         ${url ? `<button type="button" class="btn small clear" data-clear="${key}">Remove</button>` : ""}
@@ -750,7 +892,7 @@
     if (!l) return;
     viewingId = id;
     $("#vTitle").textContent = l.title || (l.kind === "piece" ? "Untitled piece" : "Untitled tile");
-    const fig = (p, cap) => `<figure><figcaption>${cap}</figcaption><div class="photo">${photoUrl(p) ? `<img src="${esc(photoUrl(p))}" alt="${cap} photo">` : "No photo"}</div></figure>`;
+    const fig = (p, cap) => `<figure><figcaption>${cap}</figcaption><div class="photo">${p?.id ? photoImg(p, `alt="${cap} photo"`) : "No photo"}</div></figure>`;
     const glazes = (l.glazes || []).map((x) => ({ ...resolveGlaze(x), application: x.application }));
     $("#vBody").innerHTML = `
       <div class="detail-photos">${fig(l.pre, "Before firing")}${fig(l.post, "After firing")}</div>
@@ -779,6 +921,8 @@
 
   // ---------- boot ----------
   async function boot() {
+    if (hasIdCallback()) try { await finishIdSignIn(api); } catch (e) { state.authError = e.message || "Sign-in failed."; }
+    $("#signOut").addEventListener("click", signOut);
     store = apiStore();
     store.watch("config", (cfg) => {
       state.lists = cfg ? { brands: cfg.brands || [], types: cfg.types || [], clays: cfg.clays || [] } : clone(DEFAULTS);
@@ -789,8 +933,8 @@
     render();
     await store.refresh();
     // Pick up changes made on another device.
-    document.addEventListener("visibilitychange", () => { if (!document.hidden) store.refresh(); });
-    setInterval(() => { if (!document.hidden && !document.querySelector("dialog[open]")) store.refresh(); }, 60000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden && state.auth === "in") store.refresh(); });
+    setInterval(() => { if (!document.hidden && state.auth === "in" && !document.querySelector("dialog[open]")) store.refresh(); }, 60000);
   }
   route();
   boot();
