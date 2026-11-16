@@ -1,0 +1,771 @@
+<title>Glaze Journal</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Inter:wght@400;500;600&display=swap">
+<style>
+/* Layout: sticky studio header with three tabs; log is a photo grid of tiles & pieces, glazes are test-tile swatches, forms live in dialogs. */
+:root {
+  --bg: #e9ecea;
+  --surface: #f9faf9;
+  --sunk: #dfe4e1;
+  --ink: #1d2422;
+  --muted: #5b6763;
+  --line: #cdd5d1;
+  --accent: #2f6f60;
+  --accent-soft: #d4e6e0;
+  --on-accent: #ffffff;
+  --danger: #a8352a;
+  --shadow: 0 1px 2px rgb(20 30 28 / .06), 0 6px 20px rgb(20 30 28 / .07);
+  --font-display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --r: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141918; --surface: #1c2321; --sunk: #232b29; --ink: #e4eae7; --muted: #98a59f;
+    --line: #2f3a37; --accent: #79bfaa; --accent-soft: #24403a; --on-accent: #0e1715; --danger: #ef8a7d;
+    --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 6px 20px rgb(0 0 0 / .25);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141918; --surface: #1c2321; --sunk: #232b29; --ink: #e4eae7; --muted: #98a59f;
+  --line: #2f3a37; --accent: #79bfaa; --accent-soft: #24403a; --on-accent: #0e1715; --danger: #ef8a7d;
+  --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 6px 20px rgb(0 0 0 / .25);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font-body); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--surface); }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.15; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.wrap { max-width: 1120px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--surface); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; align-items: center; gap: 12px 24px; flex-wrap: wrap; padding-block: 12px; }
+.brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+.brand h1 { font-size: 1.35rem; font-weight: 700; letter-spacing: -.01em; }
+.brand svg { width: 26px; height: 34px; flex: none; }
+nav.tabs { display: flex; gap: 4px; background: var(--sunk); padding: 4px; border-radius: 999px; }
+nav.tabs a { text-decoration: none; color: var(--muted); padding: 6px 14px; border-radius: 999px; font-weight: 500; font-size: .92rem; }
+nav.tabs a[aria-current="page"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+
+main { padding-block: 24px 64px; }
+.banner { background: var(--accent-soft); border-radius: var(--r); padding: 10px 14px; margin-bottom: 18px; font-size: .9rem; }
+.view-head { display: flex; align-items: end; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.view-head h2 { font-size: 1.7rem; font-weight: 700; }
+.view-head p { margin: 4px 0 0; color: var(--muted); }
+
+.btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface); padding: 8px 14px; border-radius: 8px; cursor: pointer; font-weight: 500; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.danger { color: var(--danger); }
+.btn.danger.armed { background: var(--danger); border-color: var(--danger); color: var(--surface); }
+.btn.small { padding: 4px 10px; font-size: .85rem; }
+.btn:disabled { opacity: .55; cursor: default; }
+.linkish { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font-weight: 500; }
+
+.filters { display: flex; gap: 8px 10px; flex-wrap: wrap; align-items: center; margin-bottom: 18px; }
+.chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 12px; cursor: pointer; font-size: .88rem; }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.filters select { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 10px; font-size: .88rem; max-width: 100%; }
+.count { color: var(--muted); font-size: .85rem; margin-left: auto; font-variant-numeric: tabular-nums; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; cursor: pointer; text-align: left; padding: 0; display: flex; flex-direction: column; }
+.card:hover { box-shadow: var(--shadow); }
+.photo { aspect-ratio: 4 / 3; max-width: 100%; background: var(--sunk); position: relative; overflow: hidden; display: grid; place-items: center; color: var(--muted); font-size: .8rem; }
+.photo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.kind { position: absolute; top: 8px; left: 8px; background: var(--surface); color: var(--ink); font-size: .72rem; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; }
+.stage { position: absolute; bottom: 8px; right: 8px; background: rgb(0 0 0 / .55); color: #fff; font-size: .7rem; padding: 2px 7px; border-radius: 999px; }
+.card-body { padding: 12px 14px 14px; display: grid; gap: 6px; }
+.card-body h3 { font-size: 1.05rem; font-weight: 500; }
+.meta { color: var(--muted); font-size: .84rem; }
+.glaze-dots { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: .82rem; }
+.glaze-dots span { display: inline-flex; align-items: center; gap: 5px; }
+.dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid rgb(0 0 0 / .15); flex: none; }
+
+.empty { border: 1.5px dashed var(--line); border-radius: var(--r); padding: 40px 20px; text-align: center; color: var(--muted); display: grid; gap: 12px; justify-items: center; }
+.empty h3 { color: var(--ink); font-size: 1.2rem; }
+.empty p { margin: 0; max-width: 46ch; }
+
+.glaze-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+.glaze-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 12px 12px; cursor: pointer; text-align: left; display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: start; }
+.glaze-card:hover { box-shadow: var(--shadow); }
+.glaze-card svg { width: 44px; height: 58px; }
+.glaze-card .gname { font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+.glaze-card .gsub { color: var(--muted); font-size: .8rem; }
+.pill { display: inline-block; font-size: .72rem; padding: 1px 8px; border-radius: 999px; background: var(--sunk); color: var(--muted); font-weight: 500; }
+.brand-group { margin-bottom: 26px; }
+.brand-group h3 { font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-family: var(--font-body); font-weight: 600; margin-bottom: 10px; }
+
+.lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.list-box { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: grid; gap: 12px; align-content: start; }
+.list-box h3 { font-size: 1.1rem; }
+.list-box ul { list-style: none; margin: 0; padding: 0; display: grid; }
+.list-box li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.list-box li:last-child { border-bottom: 0; }
+.list-box li small { color: var(--muted); font-variant-numeric: tabular-nums; }
+.x { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 2px 6px; border-radius: 6px; }
+.x:hover { color: var(--danger); background: var(--sunk); }
+.inline-add { display: flex; gap: 8px; }
+.inline-add input { flex: 1; min-width: 0; }
+
+/* Dialogs & forms */
+dialog { border: 0; padding: 0; border-radius: 14px; background: var(--surface); color: var(--ink); width: min(720px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); box-shadow: 0 20px 60px rgb(0 0 0 / .3); }
+dialog::backdrop { background: rgb(10 16 14 / .5); }
+.dlg-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.dlg-head h2 { font-size: 1.3rem; }
+.dlg-body { padding: 18px 20px; display: grid; gap: 16px; }
+.dlg-foot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap; padding: 14px 20px; border-top: 1px solid var(--line); position: sticky; bottom: 0; background: var(--surface); }
+.dlg-foot .status { margin-right: auto; color: var(--muted); font-size: .88rem; }
+.dlg-foot .status.err { color: var(--danger); }
+.field { display: grid; gap: 5px; min-width: 0; }
+.field > span, .label { font-size: .8rem; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+.row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+input[type="text"], input[type="date"], select, textarea { width: 100%; border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 8px 10px; }
+textarea { resize: vertical; min-height: 64px; }
+.seg { display: inline-flex; background: var(--sunk); border-radius: 8px; padding: 3px; gap: 3px; }
+.seg label { padding: 6px 14px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: .92rem; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label:has(input:checked) { background: var(--surface); box-shadow: var(--shadow); }
+.seg label:has(input:focus-visible) { outline: 2px solid var(--accent); }
+.add-row { display: flex; gap: 8px; margin-top: 6px; }
+.add-row input { flex: 1; min-width: 0; }
+.glaze-rows { display: grid; gap: 10px; }
+.glaze-row { border: 1px solid var(--line); border-radius: var(--r); padding: 10px; display: grid; gap: 8px; background: var(--bg); }
+.glaze-row .top { display: flex; gap: 8px; align-items: center; }
+.glaze-row .top select { flex: 1; min-width: 0; }
+.photos { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+.drop { border: 1.5px dashed var(--line); border-radius: var(--r); aspect-ratio: 4 / 3; max-width: 100%; display: grid; place-items: center; text-align: center; cursor: pointer; color: var(--muted); font-size: .88rem; overflow: hidden; position: relative; background: var(--bg); }
+.drop img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.drop input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.drop:focus-within { outline: 2px solid var(--accent); }
+.drop .clear { position: absolute; top: 6px; right: 6px; z-index: 1; }
+.color-row { display: flex; align-items: center; gap: 12px; }
+.color-row input[type="color"] { width: 54px; height: 40px; border: 1px solid var(--line); border-radius: 8px; padding: 2px; background: var(--bg); cursor: pointer; }
+.color-row svg { width: 40px; height: 52px; }
+
+.detail-photos { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.detail-photos figure { margin: 0; display: grid; gap: 6px; }
+.detail-photos figcaption { font-size: .78rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.detail-photos .photo { border-radius: var(--r); overflow: hidden; }
+.dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+.dl dt { color: var(--muted); font-size: .85rem; }
+.dl dd { margin: 0; }
+.applied { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.applied li { display: grid; grid-template-columns: 34px 1fr; gap: 10px; align-items: start; }
+.applied svg { width: 34px; height: 44px; }
+.applied .how { color: var(--muted); font-size: .9rem; white-space: pre-wrap; }
+.notes { white-space: pre-wrap; background: var(--bg); border-radius: var(--r); padding: 12px 14px; margin: 0; }
+.loading { color: var(--muted); padding: 40px 0; text-align: center; }
+@media (max-width: 520px) { .view-head h2 { font-size: 1.4rem; } .dl { grid-template-columns: 1fr; } .dl dt { margin-top: 6px; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <svg viewBox="0 0 60 80" aria-hidden="true" id="logoTile"></svg>
+      <h1>Glaze Journal</h1>
+    </div>
+    <nav class="tabs" aria-label="Sections">
+      <a href="#log" data-view="log">Firing log</a>
+      <a href="#glazes" data-view="glazes">Glazes</a>
+      <a href="#lists" data-view="lists">Lists</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="banner" class="banner" hidden></div>
+  <section id="view"><p class="loading">Opening the studio…</p></section>
+</main>
+
+<!-- Log entry form -->
+<dialog id="logDlg">
+  <form id="logForm" method="dialog" novalidate>
+    <div class="dlg-head"><h2 id="logDlgTitle">New log entry</h2><button type="button" class="x" data-close aria-label="Close">×</button></div>
+    <div class="dlg-body">
+      <div class="seg" role="radiogroup" aria-label="Entry type">
+        <label><input type="radio" name="kind" value="tile" id="kindTile" checked> Test tile</label>
+        <label><input type="radio" name="kind" value="piece" id="kindPiece"> Piece</label>
+      </div>
+      <div class="row2">
+        <label class="field"><span>Name</span><input type="text" id="lfTitle" placeholder="e.g. Celadon over Blue Rutile, or Breakfast bowl #3"></label>
+        <label class="field"><span>Date</span><input type="date" id="lfDate"></label>
+      </div>
+      <div class="row2">
+        <div class="field"><label class="label" for="lfClay">Clay body</label><select id="lfClay" data-list="clays"></select></div>
+        <label class="field"><span>Firing</span><input type="text" id="lfFiring" placeholder="e.g. Cone 6 oxidation, slow cool"></label>
+      </div>
+      <div class="field">
+        <span class="label">Glazes, in order applied</span>
+        <div id="glazeRows" class="glaze-rows"></div>
+        <div><button type="button" class="btn small" id="addGlazeRow">+ Add glaze</button></div>
+      </div>
+      <div class="photos" id="photoFields"></div>
+      <label class="field"><span>Notes</span><textarea id="lfNotes" rows="4" placeholder="Results, surprises, what to try next…"></textarea></label>
+    </div>
+    <div class="dlg-foot">
+      <span class="status" id="logStatus"></span>
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button type="submit" class="btn primary" id="logSave">Save entry</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Log entry detail -->
+<dialog id="viewDlg">
+  <div class="dlg-head"><h2 id="vTitle"></h2><button type="button" class="x" data-close aria-label="Close">×</button></div>
+  <div class="dlg-body" id="vBody"></div>
+  <div class="dlg-foot">
+    <button type="button" class="btn danger" id="vDelete">Delete</button>
+    <button type="button" class="btn primary" id="vEdit">Edit</button>
+  </div>
+</dialog>
+
+<!-- Glaze form -->
+<dialog id="glazeDlg">
+  <form id="glazeForm" method="dialog" novalidate>
+    <div class="dlg-head"><h2 id="glazeDlgTitle">New glaze</h2><button type="button" class="x" data-close aria-label="Close">×</button></div>
+    <div class="dlg-body">
+      <div class="row2">
+        <div class="field"><label class="label" for="gfBrand">Brand</label><select id="gfBrand" data-list="brands"></select></div>
+        <div class="field"><label class="label" for="gfType">Type</label><select id="gfType" data-list="types"></select></div>
+      </div>
+      <label class="field"><span>Name</span><input type="text" id="gfName" placeholder="e.g. Blue Rutile, SW-121 Turquoise Matte"></label>
+      <div class="field">
+        <label class="label" for="gfColor">Color</label>
+        <div class="color-row"><input type="color" id="gfColor" value="#5f8f86"><svg viewBox="0 0 60 80" id="gfPreview" aria-hidden="true"></svg><span class="meta" id="gfHex"></span></div>
+      </div>
+      <p class="meta" id="gfUsage" hidden></p>
+    </div>
+    <div class="dlg-foot">
+      <span class="status" id="glazeStatus"></span>
+      <button type="button" class="btn danger" id="gfDelete" hidden>Delete</button>
+      <button type="button" class="btn" id="gfShow" hidden>Show entries</button>
+      <button type="submit" class="btn primary">Save glaze</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+(() => {
+  const DEFAULTS = {
+    brands: ["Mayco", "Amaco", "Freeform", "Velvet Underglaze"],
+    types: ["Stable", "Float", "Fluid"],
+    clays: ["Laguna Speckled Buff", "Laguna Dover White"],
+  };
+  const LIST_LABELS = { brands: "brand", types: "glaze type", clays: "clay body" };
+  const state = {
+    view: "log",
+    glazes: [], logs: [], lists: clone(DEFAULTS),
+    loaded: { glazes: false, logs: false },
+    filter: { kind: "all", glaze: "", clay: "" },
+    glazeFilter: "",
+    canUpload: true,
+  };
+  let store = null;
+
+  // ---------- helpers ----------
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+  const $ = (s, r = document) => r.querySelector(s);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const today = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+  const fmtDate = (s) => { if (!s) return ""; const d = new Date(s + "T12:00:00"); return isNaN(d) ? s : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }); };
+  const glazeById = (id) => state.glazes.find((g) => g.id === id);
+  const glazeLabel = (g) => g ? `${g.brand} · ${g.name}` : "Deleted glaze";
+  const byText = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" });
+  function photoUrl(p) { if (!p) return ""; return p.id ? "/_blob/" + p.id : (p.url || ""); }
+  function resolveGlaze(item) {
+    const g = glazeById(item.glazeId);
+    return g ? { ...g, live: true } : { name: item.name || "Deleted glaze", brand: item.brand || "", type: item.type || "", color: item.color || "#999999", live: false };
+  }
+
+  // Test-tile swatch: raw clay below, glaze dipped on top, drips for fluid glazes.
+  function tileSvg(color, type) {
+    const t = (type || "").toLowerCase();
+    const y = t === "fluid" ? 44 : t === "float" ? 48 : 50;
+    let glaze = `M0 0H60V${y}Q52.5 ${y + 3} 45 ${y}T30 ${y}T15 ${y}T0 ${y}Z`;
+    let drips = "";
+    if (t === "fluid") drips = `<path d="M11 ${y}q2 14 4 14q2 0 3-14z M38 ${y}q1 20 4 20q3 0 3-20z" fill="${esc(color)}"/>`;
+    if (t === "float") drips = `<path d="M22 ${y}q1 6 3 6q2 0 2-6z" fill="${esc(color)}"/>`;
+    const specks = [[8, 62], [20, 70], [33, 64], [47, 72], [52, 60], [14, 76], [40, 58]].map(([x, yy]) => `<circle cx="${x}" cy="${yy}" r="0.9" fill="#6b5640"/>`).join("");
+    return `<rect x="0" y="0" width="60" height="80" rx="6" fill="#d3bd98"/>${specks}<g style="clip-path:inset(0 round 6px)"><path d="${glaze}" fill="${esc(color)}"/>${drips}<rect x="5" y="4" width="7" height="${y - 10}" rx="3.5" fill="#fff" opacity=".18"/></g><circle cx="30" cy="11" r="4.2" style="fill:var(--surface)" stroke="rgb(0 0 0 / .18)"/><rect x=".5" y=".5" width="59" height="79" rx="5.5" fill="none" stroke="rgb(0 0 0 / .15)"/>`;
+  }
+  $("#logoTile").innerHTML = tileSvg("#2f6f60", "Fluid");
+
+  // ---------- storage ----------
+  function memoryStore() {
+    const data = { glazes: new Map(), logs: new Map(), config: null };
+    const subs = { glazes: [], logs: [], config: [] };
+    const emit = (c) => { const v = c === "config" ? data.config : [...data[c]].map(([id, d]) => ({ id, ...d })); subs[c].forEach((f) => f(v)); };
+    return {
+      live: false,
+      watch(c, cb) { subs[c].push(cb); setTimeout(() => emit(c)); },
+      async save(c, id, d) { id = id || (crypto.randomUUID?.() || String(Date.now())); data[c].set(id, d); emit(c); return id; },
+      async remove(c, id) { data[c].delete(id); emit(c); },
+      async saveConfig(d) { data.config = d; emit("config"); },
+      async upload(blob) { return { url: URL.createObjectURL(blob) }; },
+      async deleteAsset() {},
+    };
+  }
+  function dbStore(db, assets) {
+    const onErr = (e) => showBanner(e?.code === "revoked" ? "This page lost access to its saved data." : "Couldn't load saved data right now. Reload the page to try again.");
+    return {
+      live: true,
+      watch(c, cb) {
+        if (c === "config") return db.doc("config/lists").onSnapshot((s) => cb(s.exists ? s.data() : null), onErr);
+        return db.collection(c).onSnapshot((s) => cb(s.docs.map((d) => ({ id: d.id, ...d.data() }))), onErr);
+      },
+      async save(c, id, d) {
+        if (id) { await db.collection(c).doc(id).set(d); return id; }
+        return (await db.collection(c).add(d)).id;
+      },
+      async remove(c, id) { await db.collection(c).doc(id).delete(); },
+      async saveConfig(d) { await db.doc("config/lists").set(d); },
+      async upload(blob) {
+        if (!assets) throw new Error("Photo uploads are only available to editors of this page.");
+        const r = await assets.upload(blob);
+        return { id: r.id };
+      },
+      async deleteAsset(id) { if (assets && id) { try { await assets.delete(id); } catch {} } },
+    };
+  }
+
+  async function shrink(file) {
+    try {
+      const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+      const s = Math.min(1, 1800 / Math.max(bmp.width, bmp.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s);
+      c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+      return await new Promise((res) => c.toBlob((b) => res(b || file), "image/jpeg", 0.85));
+    } catch { return file; }
+  }
+
+  function showBanner(text) { const b = $("#banner"); b.textContent = text; b.hidden = !text; }
+
+  async function saveLists(next) {
+    state.lists = next;
+    render(); refreshListSelects();
+    try { await store.saveConfig(next); } catch (e) { showBanner("Couldn't save the list change. " + (e?.message || "")); }
+  }
+
+  // ---------- routing ----------
+  const VIEWS = ["log", "glazes", "lists"];
+  function route() {
+    const h = location.hash.replace("#", "");
+    state.view = VIEWS.includes(h) ? h : "log";
+    document.querySelectorAll("nav.tabs a").forEach((a) => a.setAttribute("aria-current", a.dataset.view === state.view ? "page" : "false"));
+    render();
+  }
+  window.addEventListener("hashchange", route);
+
+  // ---------- rendering ----------
+  function render() {
+    const v = $("#view");
+    if (!store) { v.innerHTML = `<p class="loading">Opening the studio…</p>`; return; }
+    if (state.view === "log") v.innerHTML = renderLog();
+    else if (state.view === "glazes") v.innerHTML = renderGlazes();
+    else v.innerHTML = renderLists();
+  }
+
+  function usageCount(field, value) {
+    if (field === "glaze") return state.logs.filter((l) => (l.glazes || []).some((x) => x.glazeId === value)).length;
+    if (field === "clay") return state.logs.filter((l) => l.clay === value).length;
+    if (field === "brand") return state.glazes.filter((g) => g.brand === value).length;
+    if (field === "type") return state.glazes.filter((g) => g.type === value).length;
+    return 0;
+  }
+
+  function sortedLogs() {
+    return [...state.logs].sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.createdAt || 0) - (a.createdAt || 0));
+  }
+
+  function renderLog() {
+    const f = state.filter;
+    const all = sortedLogs();
+    const list = all.filter((l) => (f.kind === "all" || l.kind === f.kind) && (!f.clay || l.clay === f.clay) && (!f.glaze || (l.glazes || []).some((x) => x.glazeId === f.glaze)));
+    const head = `<div class="view-head"><div><h2>Firing log</h2><p>Test tiles and finished pieces, before and after the kiln.</p></div><button class="btn primary" data-act="new-log">+ New entry</button></div>`;
+    if (!state.loaded.logs) return head + `<p class="loading">Loading entries…</p>`;
+    if (!all.length) {
+      return head + `<div class="empty"><h3>No firings logged yet</h3><p>Add a test tile or a piece: pick the clay body and glazes, describe how you applied each one, and attach photos from before and after the firing.</p>${state.glazes.length ? "" : `<p>Tip: add a few glazes to your catalog first so you can pick them here.</p>`}<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center"><button class="btn primary" data-act="new-log">+ New entry</button>${state.glazes.length ? "" : `<a class="btn" href="#glazes">Go to glazes</a>`}</div></div>`;
+    }
+    const usedGlazes = state.glazes.filter((g) => usageCount("glaze", g.id)).sort((a, b) => byText(glazeLabel(a), glazeLabel(b)));
+    const usedClays = [...new Set(all.map((l) => l.clay).filter(Boolean))].sort(byText);
+    const chip = (k, label) => `<button class="chip" data-kind="${k}" aria-pressed="${f.kind === k}">${label}</button>`;
+    const filters = `<div class="filters">${chip("all", "All")}${chip("tile", "Test tiles")}${chip("piece", "Pieces")}
+      <select id="fGlaze" aria-label="Filter by glaze"><option value="">Any glaze</option>${usedGlazes.map((g) => `<option value="${esc(g.id)}" ${f.glaze === g.id ? "selected" : ""}>${esc(glazeLabel(g))}</option>`).join("")}</select>
+      <select id="fClay" aria-label="Filter by clay body"><option value="">Any clay</option>${usedClays.map((c) => `<option ${f.clay === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
+      <span class="count">${list.length} of ${all.length}</span></div>`;
+    if (!list.length) return head + filters + `<div class="empty"><p>No entries match these filters.</p><button class="btn" data-act="clear-filters">Clear filters</button></div>`;
+    return head + filters + `<div class="grid">${list.map(logCard).join("")}</div>`;
+  }
+
+  function logCard(l) {
+    const post = photoUrl(l.post), pre = photoUrl(l.pre);
+    const img = post || pre;
+    const glazes = (l.glazes || []).map(resolveGlaze);
+    return `<button class="card" data-log="${esc(l.id)}">
+      <div class="photo">${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : "No photo yet"}
+        <span class="kind">${l.kind === "piece" ? "Piece" : "Test tile"}</span>
+        ${img ? `<span class="stage">${post ? "After firing" : "Before firing"}</span>` : ""}</div>
+      <div class="card-body">
+        <h3>${esc(l.title || (l.kind === "piece" ? "Untitled piece" : "Untitled tile"))}</h3>
+        <div class="meta">${esc([fmtDate(l.date), l.clay].filter(Boolean).join(" · "))}</div>
+        ${glazes.length ? `<div class="glaze-dots">${glazes.map((g) => `<span><i class="dot" style="background:${esc(g.color)}"></i>${esc(g.name)}</span>`).join("")}</div>` : ""}
+      </div></button>`;
+  }
+
+  function renderGlazes() {
+    const head = `<div class="view-head"><div><h2>Glaze catalog</h2><p>${state.glazes.length} glaze${state.glazes.length === 1 ? "" : "s"} across ${new Set(state.glazes.map((g) => g.brand)).size} brands.</p></div><button class="btn primary" data-act="new-glaze">+ Add glaze</button></div>`;
+    if (!state.loaded.glazes) return head + `<p class="loading">Loading glazes…</p>`;
+    if (!state.glazes.length) return head + `<div class="empty"><h3>Your catalog is empty</h3><p>Add the glazes on your shelf with their brand, type (stable, float, fluid…) and a color so you can spot them at a glance.</p><button class="btn primary" data-act="new-glaze">+ Add glaze</button></div>`;
+    const types = [...new Set(state.glazes.map((g) => g.type).filter(Boolean))].sort(byText);
+    const tf = state.glazeFilter;
+    const filters = `<div class="filters"><button class="chip" data-gtype="" aria-pressed="${!tf}">All types</button>${types.map((t) => `<button class="chip" data-gtype="${esc(t)}" aria-pressed="${tf === t}">${esc(t)}</button>`).join("")}</div>`;
+    const shown = state.glazes.filter((g) => !tf || g.type === tf);
+    const brands = [...new Set(shown.map((g) => g.brand))].sort(byText);
+    return head + filters + brands.map((b) => `<section class="brand-group"><h3>${esc(b || "No brand")}</h3><div class="glaze-grid">${shown.filter((g) => g.brand === b).sort((x, y) => byText(x.name, y.name)).map((g) => {
+      const n = usageCount("glaze", g.id);
+      return `<button class="glaze-card" data-glaze="${esc(g.id)}"><svg viewBox="0 0 60 80" aria-hidden="true">${tileSvg(g.color, g.type)}</svg><div><div class="gname">${esc(g.name)}</div><div class="gsub"><span class="pill">${esc(g.type || "—")}</span></div><div class="gsub" style="margin-top:4px">${n ? `${n} entr${n === 1 ? "y" : "ies"}` : "Not used yet"}</div></div></button>`;
+    }).join("")}</div></section>`).join("");
+  }
+
+  function renderLists() {
+    const box = (key, title, field) => `<div class="list-box"><h3>${title}</h3><ul>${state.lists[key].map((item, i) => {
+      const n = usageCount(field, item);
+      return `<li><span>${esc(item)}</span><span style="display:flex;align-items:center;gap:6px">${n ? `<small>${n} used</small>` : ""}<button class="x" data-remove="${key}" data-i="${i}" aria-label="Remove ${esc(item)}">×</button></span></li>`;
+    }).join("") || `<li class="meta">Nothing here yet.</li>`}</ul>
+      <form class="inline-add" data-addlist="${key}"><input type="text" id="add-${key}" placeholder="Add a ${LIST_LABELS[key]}" aria-label="Add a ${LIST_LABELS[key]}"><button class="btn small" type="submit">Add</button></form></div>`;
+    return `<div class="view-head"><div><h2>Lists</h2><p>The choices offered in the glaze and log forms. Removing one keeps it on records that already use it.</p></div></div>
+      <div class="lists">${box("brands", "Brands", "brand")}${box("types", "Glaze types", "type")}${box("clays", "Clay bodies", "clay")}</div>`;
+  }
+
+  // ---------- view events ----------
+  $("#view").addEventListener("click", (e) => {
+    const t = e.target.closest("button, a");
+    if (!t) return;
+    if (t.dataset.act === "new-log") openLogForm(null);
+    else if (t.dataset.act === "new-glaze") openGlazeForm(null);
+    else if (t.dataset.act === "clear-filters") { state.filter = { kind: "all", glaze: "", clay: "" }; render(); }
+    else if (t.dataset.kind) { state.filter.kind = t.dataset.kind; render(); }
+    else if ("gtype" in t.dataset) { state.glazeFilter = t.dataset.gtype; render(); }
+    else if (t.dataset.log) openDetail(t.dataset.log);
+    else if (t.dataset.glaze) openGlazeForm(t.dataset.glaze);
+    else if (t.dataset.remove) {
+      const key = t.dataset.remove, next = clone(state.lists);
+      next[key].splice(+t.dataset.i, 1);
+      saveLists(next);
+    }
+  });
+  $("#view").addEventListener("change", (e) => {
+    if (e.target.id === "fGlaze") { state.filter.glaze = e.target.value; render(); }
+    if (e.target.id === "fClay") { state.filter.clay = e.target.value; render(); }
+  });
+  $("#view").addEventListener("submit", (e) => {
+    const f = e.target.closest("[data-addlist]");
+    if (!f) return;
+    e.preventDefault();
+    const key = f.dataset.addlist, input = f.querySelector("input"), val = input.value.trim();
+    if (!val) return;
+    if (!state.lists[key].some((x) => x.toLowerCase() === val.toLowerCase())) {
+      const next = clone(state.lists); next[key].push(val); saveLists(next);
+    }
+    input.value = "";
+  });
+
+  // ---------- dialogs ----------
+  document.querySelectorAll("dialog").forEach((d) => {
+    d.addEventListener("click", (e) => { if (e.target === d || e.target.closest("[data-close]")) d.close(); });
+  });
+
+  // Select with "+ Add new…" option backed by a list.
+  function fillListSelect(sel, value) {
+    const key = sel.dataset.list, items = [...state.lists[key]];
+    if (value && !items.includes(value)) items.push(value);
+    sel.innerHTML = `<option value="" disabled ${value ? "" : "selected"}>Choose…</option>` + items.map((i) => `<option ${i === value ? "selected" : ""}>${esc(i)}</option>`).join("") + `<option value="__new">+ Add new ${LIST_LABELS[key]}…</option>`;
+    sel.dataset.prev = value || "";
+  }
+  function refreshListSelects() { document.querySelectorAll("select[data-list]").forEach((s) => { if (s.value !== "__new") fillListSelect(s, s.value); }); }
+  document.querySelectorAll("select[data-list]").forEach((sel) => {
+    const row = document.createElement("div");
+    row.className = "add-row"; row.hidden = true;
+    row.innerHTML = `<input type="text" id="${sel.id}-new" aria-label="New ${LIST_LABELS[sel.dataset.list]}" placeholder="New ${LIST_LABELS[sel.dataset.list]}"><button type="button" class="btn small">Add</button>`;
+    sel.after(row);
+    const input = row.querySelector("input");
+    const commit = () => {
+      const val = input.value.trim();
+      if (!val) return;
+      const key = sel.dataset.list;
+      const existing = state.lists[key].find((x) => x.toLowerCase() === val.toLowerCase());
+      if (!existing) { const next = clone(state.lists); next[key].push(val); saveLists(next); }
+      fillListSelect(sel, existing || val);
+      sel.dispatchEvent(new Event("input"));
+      row.hidden = true; input.value = "";
+    };
+    row.querySelector("button").addEventListener("click", commit);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } });
+    sel.addEventListener("change", () => {
+      if (sel.value === "__new") { sel.value = sel.dataset.prev; row.hidden = false; input.focus(); }
+      else { sel.dataset.prev = sel.value; row.hidden = true; }
+    });
+  });
+
+  // ----- glaze form -----
+  let editingGlaze = null;
+  function updateGlazePreview() {
+    const c = $("#gfColor").value;
+    $("#gfPreview").innerHTML = tileSvg(c, $("#gfType").value);
+    $("#gfHex").textContent = c.toUpperCase();
+  }
+  function openGlazeForm(id) {
+    const g = id ? glazeById(id) : null;
+    editingGlaze = g;
+    $("#glazeDlgTitle").textContent = g ? "Edit glaze" : "New glaze";
+    fillListSelect($("#gfBrand"), g?.brand || "");
+    fillListSelect($("#gfType"), g?.type || "");
+    $("#gfName").value = g?.name || "";
+    $("#gfColor").value = g?.color || "#5f8f86";
+    const n = g ? usageCount("glaze", g.id) : 0;
+    $("#gfUsage").hidden = !g; $("#gfUsage").textContent = n ? `Used in ${n} log entr${n === 1 ? "y" : "ies"}.` : "Not used in any log entries yet.";
+    $("#gfDelete").hidden = !g; disarm($("#gfDelete"));
+    $("#gfShow").hidden = !n;
+    setStatus("#glazeStatus", "");
+    document.querySelectorAll("#glazeDlg .add-row").forEach((r) => (r.hidden = true));
+    updateGlazePreview();
+    $("#glazeDlg").showModal();
+    if (!g) $("#gfName").focus();
+  }
+  $("#gfColor").addEventListener("input", updateGlazePreview);
+  $("#gfType").addEventListener("change", updateGlazePreview);
+  $("#gfType").addEventListener("input", updateGlazePreview);
+  $("#glazeForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const data = { brand: $("#gfBrand").value, type: $("#gfType").value, name: $("#gfName").value.trim(), color: $("#gfColor").value };
+    if (!data.brand || data.brand === "__new") return setStatus("#glazeStatus", "Choose a brand.", true);
+    if (!data.name) return setStatus("#glazeStatus", "Give the glaze a name.", true);
+    if (!data.type || data.type === "__new") return setStatus("#glazeStatus", "Choose a type.", true);
+    data.createdAt = editingGlaze?.createdAt || Date.now();
+    setStatus("#glazeStatus", "Saving…");
+    try { await store.save("glazes", editingGlaze?.id || null, data); $("#glazeDlg").close(); }
+    catch (err) { setStatus("#glazeStatus", "Couldn't save: " + (err?.message || "try again."), true); }
+  });
+  $("#gfDelete").addEventListener("click", async (e) => {
+    const b = e.currentTarget;
+    if (!b.classList.contains("armed")) {
+      const n = usageCount("glaze", editingGlaze.id);
+      arm(b, n ? `Delete (used in ${n})` : "Confirm delete");
+      return;
+    }
+    try { await store.remove("glazes", editingGlaze.id); $("#glazeDlg").close(); }
+    catch (err) { setStatus("#glazeStatus", "Couldn't delete: " + (err?.message || "try again."), true); }
+  });
+  $("#gfShow").addEventListener("click", () => {
+    state.filter = { kind: "all", glaze: editingGlaze.id, clay: "" };
+    $("#glazeDlg").close();
+    location.hash = "log"; route();
+  });
+
+  function arm(b, label) { b.classList.add("armed"); b.dataset.label = b.dataset.label || b.textContent; b.textContent = label; }
+  function disarm(b) { b.classList.remove("armed"); if (b.dataset.label) b.textContent = b.dataset.label; }
+  function setStatus(sel, text, err) { const s = $(sel); s.textContent = text; s.classList.toggle("err", !!err); }
+
+  // ----- log form -----
+  let editingLog = null;
+  const pendingPhotos = { pre: undefined, post: undefined }; // undefined = unchanged, null = removed, File = new
+
+  function glazeOptions(selected) {
+    const sorted = [...state.glazes].sort((a, b) => byText(glazeLabel(a), glazeLabel(b)));
+    let opts = `<option value="" disabled ${selected ? "" : "selected"}>Choose a glaze…</option>`;
+    if (selected && !glazeById(selected)) opts += `<option value="${esc(selected)}" selected>Deleted glaze</option>`;
+    return opts + sorted.map((g) => `<option value="${esc(g.id)}" ${g.id === selected ? "selected" : ""}>${esc(glazeLabel(g))} (${esc(g.type)})</option>`).join("");
+  }
+  let rowSeq = 0;
+  function addGlazeRow(item = {}) {
+    const i = rowSeq++;
+    const row = document.createElement("div");
+    row.className = "glaze-row";
+    row.dataset.snapshot = JSON.stringify(item);
+    const color = item.glazeId ? resolveGlaze(item).color : "transparent";
+    row.innerHTML = `<div class="top"><i class="dot" style="width:18px;height:18px;background:${esc(color)}"></i>
+      <select id="gr-glaze-${i}" aria-label="Glaze">${glazeOptions(item.glazeId)}</select>
+      <button type="button" class="x" aria-label="Remove this glaze">×</button></div>
+      <textarea id="gr-app-${i}" rows="2" aria-label="How it was applied" placeholder="How it was applied: e.g. 3 brushed coats, dipped 2 s, sprayed over rim, wax resist foot…">${esc(item.application || "")}</textarea>`;
+    row.querySelector("select").addEventListener("change", (e) => { const g = glazeById(e.target.value); row.querySelector(".dot").style.background = g ? g.color : "transparent"; });
+    row.querySelector(".x").addEventListener("click", () => row.remove());
+    $("#glazeRows").append(row);
+    return row;
+  }
+  $("#addGlazeRow").addEventListener("click", () => {
+    if (!state.glazes.length) { setStatus("#logStatus", "Your glaze catalog is empty. Add glazes on the Glazes tab first.", true); return; }
+    addGlazeRow().querySelector("select").focus();
+  });
+
+  function photoField(key, label, existing) {
+    const url = photoUrl(existing);
+    return `<div class="field"><span class="label">${label}</span>
+      <label class="drop" id="drop-${key}">${url ? `<img src="${esc(url)}" alt="">` : ""}
+        <span>${url ? "" : "Add photo<br><small>Tap to choose or take one</small>"}</span>
+        <input type="file" accept="image/*" id="file-${key}" data-photo="${key}">
+        ${url ? `<button type="button" class="btn small clear" data-clear="${key}">Remove</button>` : ""}
+      </label></div>`;
+  }
+  function renderPhotoFields(l) {
+    if (!state.canUpload) { $("#photoFields").innerHTML = `<p class="meta">Only editors of this page can add photos.</p>`; return; }
+    $("#photoFields").innerHTML = photoField("pre", "Before firing", l?.pre) + photoField("post", "After firing", l?.post);
+  }
+  $("#photoFields").addEventListener("change", (e) => {
+    const key = e.target.dataset.photo, file = e.target.files?.[0];
+    if (!key || !file) return;
+    pendingPhotos[key] = file;
+    const drop = $("#drop-" + key);
+    drop.querySelector("img")?.remove();
+    drop.querySelector("span").innerHTML = "";
+    const img = document.createElement("img"); img.alt = ""; img.src = URL.createObjectURL(file);
+    drop.prepend(img);
+    if (!drop.querySelector(".clear")) drop.insertAdjacentHTML("beforeend", `<button type="button" class="btn small clear" data-clear="${key}">Remove</button>`);
+  });
+  $("#photoFields").addEventListener("click", (e) => {
+    const key = e.target.dataset?.clear;
+    if (!key) return;
+    e.preventDefault();
+    pendingPhotos[key] = null;
+    const drop = $("#drop-" + key);
+    drop.querySelector("img")?.remove();
+    e.target.remove();
+    drop.querySelector("input").value = "";
+    drop.querySelector("span").innerHTML = "Add photo<br><small>Tap to choose or take one</small>";
+  });
+
+  function openLogForm(id) {
+    const l = id ? state.logs.find((x) => x.id === id) : null;
+    editingLog = l;
+    pendingPhotos.pre = undefined; pendingPhotos.post = undefined;
+    $("#logDlgTitle").textContent = l ? "Edit log entry" : "New log entry";
+    (l?.kind === "piece" ? $("#kindPiece") : $("#kindTile")).checked = true;
+    $("#lfTitle").value = l?.title || "";
+    $("#lfDate").value = l?.date || today();
+    fillListSelect($("#lfClay"), l?.clay || state.lists.clays[0] || "");
+    $("#lfFiring").value = l?.firing ?? (state.logs.length ? sortedLogs()[0].firing || "" : "");
+    $("#lfNotes").value = l?.notes || "";
+    $("#glazeRows").innerHTML = "";
+    (l?.glazes || []).forEach((g) => addGlazeRow(g));
+    if (!l && state.glazes.length) addGlazeRow();
+    renderPhotoFields(l);
+    setStatus("#logStatus", state.glazes.length ? "" : "Tip: add glazes on the Glazes tab to pick them here.");
+    $("#logSave").disabled = false;
+    document.querySelectorAll("#logDlg .add-row").forEach((r) => (r.hidden = true));
+    $("#logDlg").showModal();
+  }
+
+  $("#logForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const glazes = [...$("#glazeRows").children].map((row) => {
+      const glazeId = row.querySelector("select").value;
+      if (!glazeId) return null;
+      const g = glazeById(glazeId);
+      const prev = JSON.parse(row.dataset.snapshot || "{}");
+      const snap = g ? { name: g.name, brand: g.brand, type: g.type, color: g.color } : { name: prev.name || "", brand: prev.brand || "", type: prev.type || "", color: prev.color || "" };
+      return { glazeId, application: row.querySelector("textarea").value.trim(), ...snap };
+    }).filter(Boolean);
+    const clay = $("#lfClay").value === "__new" ? "" : $("#lfClay").value;
+    const data = {
+      kind: $("#kindPiece").checked ? "piece" : "tile",
+      title: $("#lfTitle").value.trim(),
+      date: $("#lfDate").value || today(),
+      clay,
+      firing: $("#lfFiring").value.trim(),
+      glazes,
+      notes: $("#lfNotes").value.trim(),
+      pre: editingLog?.pre || null,
+      post: editingLog?.post || null,
+      createdAt: editingLog?.createdAt || Date.now(),
+      updatedAt: Date.now(),
+    };
+    $("#logSave").disabled = true;
+    const toDelete = [];
+    try {
+      for (const key of ["pre", "post"]) {
+        const p = pendingPhotos[key];
+        if (p === undefined) continue;
+        if (data[key]?.id) toDelete.push(data[key].id);
+        if (p === null) { data[key] = null; continue; }
+        setStatus("#logStatus", `Uploading ${key === "pre" ? "before" : "after"}-firing photo…`);
+        data[key] = await store.upload(await shrink(p));
+      }
+      setStatus("#logStatus", "Saving…");
+      await store.save("logs", editingLog?.id || null, data);
+      toDelete.forEach((id) => store.deleteAsset(id));
+      $("#logDlg").close();
+    } catch (err) {
+      setStatus("#logStatus", "Couldn't save: " + (err?.message || "try again."), true);
+      $("#logSave").disabled = false;
+    }
+  });
+
+  // ----- detail -----
+  let viewingId = null;
+  function openDetail(id) {
+    const l = state.logs.find((x) => x.id === id);
+    if (!l) return;
+    viewingId = id;
+    $("#vTitle").textContent = l.title || (l.kind === "piece" ? "Untitled piece" : "Untitled tile");
+    const fig = (p, cap) => `<figure><figcaption>${cap}</figcaption><div class="photo">${photoUrl(p) ? `<img src="${esc(photoUrl(p))}" alt="${cap} photo">` : "No photo"}</div></figure>`;
+    const glazes = (l.glazes || []).map((x) => ({ ...resolveGlaze(x), application: x.application }));
+    $("#vBody").innerHTML = `
+      <div class="detail-photos">${fig(l.pre, "Before firing")}${fig(l.post, "After firing")}</div>
+      <dl class="dl">
+        <dt>Type</dt><dd>${l.kind === "piece" ? "Piece" : "Test tile"}</dd>
+        <dt>Date</dt><dd>${esc(fmtDate(l.date))}</dd>
+        <dt>Clay body</dt><dd>${esc(l.clay || "—")}</dd>
+        ${l.firing ? `<dt>Firing</dt><dd>${esc(l.firing)}</dd>` : ""}
+      </dl>
+      <div class="field"><span class="label">Glazes</span>${glazes.length ? `<ol class="applied">${glazes.map((g) => `<li><svg viewBox="0 0 60 80" aria-hidden="true">${tileSvg(g.color, g.type)}</svg><div><div><strong>${esc(g.name)}</strong> <span class="meta">${esc(g.brand)}${g.type ? " · " + esc(g.type) : ""}${g.live ? "" : " · removed from catalog"}</span></div>${g.application ? `<div class="how">${esc(g.application)}</div>` : ""}</div></li>`).join("")}</ol>` : `<p class="meta" style="margin:0">No glazes recorded.</p>`}</div>
+      ${l.notes ? `<div class="field"><span class="label">Notes</span><p class="notes">${esc(l.notes)}</p></div>` : ""}`;
+    disarm($("#vDelete"));
+    $("#viewDlg").showModal();
+  }
+  $("#vEdit").addEventListener("click", () => { $("#viewDlg").close(); openLogForm(viewingId); });
+  $("#vDelete").addEventListener("click", async (e) => {
+    const b = e.currentTarget;
+    if (!b.classList.contains("armed")) { arm(b, "Confirm delete"); return; }
+    const l = state.logs.find((x) => x.id === viewingId);
+    try {
+      await store.remove("logs", viewingId);
+      [l?.pre?.id, l?.post?.id].forEach((id) => id && store.deleteAsset(id));
+      $("#viewDlg").close();
+    } catch (err) { b.textContent = "Couldn't delete"; }
+  });
+
+  // ---------- boot ----------
+  async function boot() {
+    let db = null, assets = null, user = null;
+    if (window.claude?.use) {
+      [db, assets, user] = await Promise.all([claude.use("db"), claude.use("assets"), claude.use("user")]);
+    }
+    if (db) {
+      store = dbStore(db, assets);
+      state.canUpload = !!assets;
+      try { if (user && (await user.can("data.write")) === false) showBanner("You can view this journal, but only its editors can add or change entries."); } catch {}
+    } else {
+      store = memoryStore();
+      showBanner("Saving isn't available in this view, so changes last only until you close the page. Open the journal on claude.ai while signed in to keep your records.");
+    }
+    const timer = setTimeout(() => { if (!state.loaded.logs || !state.loaded.glazes) { state.loaded.logs = state.loaded.glazes = true; render(); } }, 10000);
+    store.watch("config", (cfg) => {
+      state.lists = cfg ? { brands: cfg.brands || [], types: cfg.types || [], clays: cfg.clays || [] } : clone(DEFAULTS);
+      render(); refreshListSelects();
+    });
+    store.watch("glazes", (g) => { state.glazes = g; state.loaded.glazes = true; if (state.loaded.logs) clearTimeout(timer); render(); });
+    store.watch("logs", (l) => { state.logs = l; state.loaded.logs = true; if (state.loaded.glazes) clearTimeout(timer); render(); });
+    render();
+  }
+  route();
+  boot();
+})();
+</script>

@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Glaze Journal</title>
+<meta name="theme-color" content="#2f6f60">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Glazes">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Inter:wght@400;500;600&display=swap">
+<style>
+/* Layout: sticky studio header with three tabs; log is a photo grid of tiles & pieces, glazes are test-tile swatches, forms live in dialogs. */
+:root {
+  --bg: #e9ecea;
+  --surface: #f9faf9;
+  --sunk: #dfe4e1;
+  --ink: #1d2422;
+  --muted: #5b6763;
+  --line: #cdd5d1;
+  --accent: #2f6f60;
+  --accent-soft: #d4e6e0;
+  --on-accent: #ffffff;
+  --danger: #a8352a;
+  --shadow: 0 1px 2px rgb(20 30 28 / .06), 0 6px 20px rgb(20 30 28 / .07);
+  --font-display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --r: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141918; --surface: #1c2321; --sunk: #232b29; --ink: #e4eae7; --muted: #98a59f;
+    --line: #2f3a37; --accent: #79bfaa; --accent-soft: #24403a; --on-accent: #0e1715; --danger: #ef8a7d;
+    --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 6px 20px rgb(0 0 0 / .25);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141918; --surface: #1c2321; --sunk: #232b29; --ink: #e4eae7; --muted: #98a59f;
+  --line: #2f3a37; --accent: #79bfaa; --accent-soft: #24403a; --on-accent: #0e1715; --danger: #ef8a7d;
+  --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 6px 20px rgb(0 0 0 / .25);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+img { max-width: 100%; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font-body); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--surface); }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.15; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.wrap { max-width: 1120px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--surface); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; align-items: center; gap: 12px 24px; flex-wrap: wrap; padding-block: 12px; }
+.brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+.brand h1 { font-size: 1.35rem; font-weight: 700; letter-spacing: -.01em; }
+.brand svg { width: 26px; height: 34px; flex: none; }
+nav.tabs { display: flex; gap: 4px; background: var(--sunk); padding: 4px; border-radius: 999px; }
+nav.tabs a { text-decoration: none; color: var(--muted); padding: 6px 14px; border-radius: 999px; font-weight: 500; font-size: .92rem; }
+nav.tabs a[aria-current="page"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+
+main { padding-block: 24px 64px; }
+.banner { background: var(--accent-soft); border-radius: var(--r); padding: 10px 14px; margin-bottom: 18px; font-size: .9rem; }
+.view-head { display: flex; align-items: end; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.view-head h2 { font-size: 1.7rem; font-weight: 700; }
+.view-head p { margin: 4px 0 0; color: var(--muted); }
+
+.btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface); padding: 8px 14px; border-radius: 8px; cursor: pointer; font-weight: 500; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.danger { color: var(--danger); }
+.btn.danger.armed { background: var(--danger); border-color: var(--danger); color: var(--surface); }
+.btn.small { padding: 4px 10px; font-size: .85rem; }
+.btn:disabled { opacity: .55; cursor: default; }
+.linkish { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font-weight: 500; }
+
+.filters { display: flex; gap: 8px 10px; flex-wrap: wrap; align-items: center; margin-bottom: 18px; }
+.chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 12px; cursor: pointer; font-size: .88rem; }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.filters select { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 10px; font-size: .88rem; max-width: 100%; }
+.count { color: var(--muted); font-size: .85rem; margin-left: auto; font-variant-numeric: tabular-nums; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; cursor: pointer; text-align: left; padding: 0; display: flex; flex-direction: column; }
+.card:hover { box-shadow: var(--shadow); }
+.photo { aspect-ratio: 4 / 3; max-width: 100%; background: var(--sunk); position: relative; overflow: hidden; display: grid; place-items: center; color: var(--muted); font-size: .8rem; }
+.photo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.kind { position: absolute; top: 8px; left: 8px; background: var(--surface); color: var(--ink); font-size: .72rem; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; }
+.stage { position: absolute; bottom: 8px; right: 8px; background: rgb(0 0 0 / .55); color: #fff; font-size: .7rem; padding: 2px 7px; border-radius: 999px; }
+.card-body { padding: 12px 14px 14px; display: grid; gap: 6px; }
+.card-body h3 { font-size: 1.05rem; font-weight: 500; }
+.meta { color: var(--muted); font-size: .84rem; }
+.glaze-dots { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: .82rem; }
+.glaze-dots span { display: inline-flex; align-items: center; gap: 5px; }
+.dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid rgb(0 0 0 / .15); flex: none; }
+
+.empty { border: 1.5px dashed var(--line); border-radius: var(--r); padding: 40px 20px; text-align: center; color: var(--muted); display: grid; gap: 12px; justify-items: center; }
+.empty h3 { color: var(--ink); font-size: 1.2rem; }
+.empty p { margin: 0; max-width: 46ch; }
+
+.glaze-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+.glaze-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 12px 12px; cursor: pointer; text-align: left; display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: start; }
+.glaze-card:hover { box-shadow: var(--shadow); }
+.glaze-card svg { width: 44px; height: 58px; }
+.glaze-card .gthumb { width: 44px; height: 44px; border-radius: 8px; object-fit: cover; display: block; background: var(--sunk); }
+.glaze-card .thumbwrap { position: relative; }
+.glaze-card .thumbwrap .dot { position: absolute; right: -4px; bottom: -4px; width: 16px; height: 16px; border: 2px solid var(--surface); }
+.glaze-card .gcode { color: var(--muted); font-size: .72rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.import-box { background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: 12px; display: grid; gap: 8px; }
+.import-box .meta.err { color: var(--danger); }
+.row-code { display: grid; grid-template-columns: minmax(90px, 1fr) 3fr; gap: 14px; }
+.glaze-image { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.glaze-image img { width: 160px; max-width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--r); border: 1px solid var(--line); }
+dialog.wide { width: min(1040px, calc(100vw - 24px)); }
+.ct-tools { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.ct-tools input[type="text"] { flex: 1 1 220px; min-width: 0; width: auto; }
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: .9rem; cursor: pointer; }
+.ct-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.ct-item { position: relative; display: grid; gap: 6px; align-content: start; border: 1px solid var(--line); border-radius: var(--r); padding: 8px; background: var(--bg); cursor: pointer; font-size: .85rem; }
+.ct-item:has(input:checked) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: var(--accent-soft); }
+.ct-item.have { opacity: .6; cursor: default; }
+.ct-item input { position: absolute; top: 12px; left: 12px; width: 18px; height: 18px; accent-color: var(--accent); }
+.ct-item .ph { aspect-ratio: 1; max-width: 100%; border-radius: 8px; background: var(--sunk); display: grid; place-items: center; color: var(--muted); font-weight: 600; font-size: .8rem; overflow: hidden; }
+.ct-item .ph img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ct-item .c { color: var(--muted); font-size: .72rem; font-weight: 600; letter-spacing: .05em; }
+.ct-item .n { font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+.ct-item .b { color: var(--muted); font-size: .75rem; }
+.ct-item .st { position: absolute; top: 10px; right: 10px; background: var(--surface); border-radius: 999px; padding: 1px 7px; font-size: .72rem; font-weight: 600; }
+.ct-item .st.ok { color: var(--accent); } .ct-item .st.bad { color: var(--danger); }
+.line-group { margin: 0 0 16px; }
+.line-group h4 { margin: 0 0 8px; font-size: .9rem; font-weight: 600; }
+.line-group h4 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+.search { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 14px; min-width: 0; flex: 1 1 200px; max-width: 320px; }
+.im-results { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: .88rem; }
+.im-results li { display: grid; grid-template-columns: 18px 1fr; gap: 8px; align-items: start; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.im-results li:last-child { border-bottom: 0; }
+.im-results .u { color: var(--muted); overflow-wrap: anywhere; font-size: .8rem; }
+.im-results .err { color: var(--danger); }
+.glaze-card .gname { font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+.glaze-card .gsub { color: var(--muted); font-size: .8rem; }
+.pill { display: inline-block; font-size: .72rem; padding: 1px 8px; border-radius: 999px; background: var(--sunk); color: var(--muted); font-weight: 500; }
+.brand-group { margin-bottom: 26px; }
+.brand-group h3 { font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-family: var(--font-body); font-weight: 600; margin-bottom: 10px; }
+
+.lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.list-box { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: grid; gap: 12px; align-content: start; }
+.list-box h3 { font-size: 1.1rem; }
+.list-box ul { list-style: none; margin: 0; padding: 0; display: grid; }
+.list-box li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.list-box li:last-child { border-bottom: 0; }
+.list-box li small { color: var(--muted); font-variant-numeric: tabular-nums; }
+.x { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 2px 6px; border-radius: 6px; }
+.x:hover { color: var(--danger); background: var(--sunk); }
+.inline-add { display: flex; gap: 8px; }
+.inline-add input { flex: 1; min-width: 0; }
+
+/* Dialogs & forms */
+dialog { border: 0; padding: 0; border-radius: 14px; background: var(--surface); color: var(--ink); width: min(720px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); box-shadow: 0 20px 60px rgb(0 0 0 / .3); }
+dialog::backdrop { background: rgb(10 16 14 / .5); }
+.dlg-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.dlg-head h2 { font-size: 1.3rem; }
+.dlg-body { padding: 18px 20px; display: grid; gap: 16px; }
+.dlg-foot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap; padding: 14px 20px; border-top: 1px solid var(--line); position: sticky; bottom: 0; background: var(--surface); }
+.dlg-foot .status { margin-right: auto; color: var(--muted); font-size: .88rem; }
+.dlg-foot .status.err { color: var(--danger); }
+.field { display: grid; gap: 5px; min-width: 0; }
+.field > span, .label { font-size: .8rem; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+.row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+input[type="text"], input[type="url"], input[type="date"], select, textarea { width: 100%; border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 8px 10px; }
+textarea { resize: vertical; min-height: 64px; }
+.seg { display: inline-flex; background: var(--sunk); border-radius: 8px; padding: 3px; gap: 3px; }
+.seg label { padding: 6px 14px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: .92rem; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label:has(input:checked) { background: var(--surface); box-shadow: var(--shadow); }
+.seg label:has(input:focus-visible) { outline: 2px solid var(--accent); }
+.add-row { display: flex; gap: 8px; margin-top: 6px; }
+.add-row input { flex: 1; min-width: 0; }
+.glaze-rows { display: grid; gap: 10px; }
+.glaze-row { border: 1px solid var(--line); border-radius: var(--r); padding: 10px; display: grid; gap: 8px; background: var(--bg); }
+.glaze-row .top { display: flex; gap: 8px; align-items: center; }
+.glaze-row .top select { flex: 1; min-width: 0; }
+.photos { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+.drop { border: 1.5px dashed var(--line); border-radius: var(--r); aspect-ratio: 4 / 3; max-width: 100%; display: grid; place-items: center; text-align: center; cursor: pointer; color: var(--muted); font-size: .88rem; overflow: hidden; position: relative; background: var(--bg); }
+.drop img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.drop input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.drop:focus-within { outline: 2px solid var(--accent); }
+.drop .clear { position: absolute; top: 6px; right: 6px; z-index: 1; }
+.color-row { display: flex; align-items: center; gap: 12px; }
+.color-row input[type="color"] { width: 54px; height: 40px; border: 1px solid var(--line); border-radius: 8px; padding: 2px; background: var(--bg); cursor: pointer; }
+.color-row svg { width: 40px; height: 52px; }
+
+.detail-photos { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.detail-photos figure { margin: 0; display: grid; gap: 6px; }
+.detail-photos figcaption { font-size: .78rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.detail-photos .photo { border-radius: var(--r); overflow: hidden; }
+.dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+.dl dt { color: var(--muted); font-size: .85rem; }
+.dl dd { margin: 0; }
+.applied { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.applied li { display: grid; grid-template-columns: 34px 1fr; gap: 10px; align-items: start; }
+.applied svg { width: 34px; height: 44px; }
+.applied .how { color: var(--muted); font-size: .9rem; white-space: pre-wrap; }
+.notes { white-space: pre-wrap; background: var(--bg); border-radius: var(--r); padding: 12px 14px; margin: 0; }
+.loading { color: var(--muted); padding: 40px 0; text-align: center; }
+@media (max-width: 520px) { .view-head h2 { font-size: 1.4rem; } .dl { grid-template-columns: 1fr; } .dl dt { margin-top: 6px; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <svg viewBox="0 0 60 80" aria-hidden="true" id="logoTile"></svg>
+      <h1>Glaze Journal</h1>
+    </div>
+    <nav class="tabs" aria-label="Sections">
+      <a href="#log" data-view="log">Firing log</a>
+      <a href="#glazes" data-view="glazes">Glazes</a>
+      <a href="#lists" data-view="lists">Lists</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="banner" class="banner" hidden></div>
+  <section id="view"><p class="loading">Opening the studio…</p></section>
+</main>
+
+<!-- Log entry form -->
+<dialog id="logDlg">
+  <form id="logForm" method="dialog" novalidate>
+    <div class="dlg-head"><h2 id="logDlgTitle">New log entry</h2><button type="button" class="x" data-close aria-label="Close">×</button></div>
+    <div class="dlg-body">
+      <div class="seg" role="radiogroup" aria-label="Entry type">
+        <label><input type="radio" name="kind" value="tile" id="kindTile" checked> Test tile</label>
+        <label><input type="radio" name="kind" value="piece" id="kindPiece"> Piece</label>
+      </div>
+      <div class="row2">
+        <label class="field"><span>Name</span><input type="text" id="lfTitle" placeholder="e.g. Celadon over Blue Rutile, or Breakfast bowl #3"></label>
+        <label class="field"><span>Date</span><input type="date" id="lfDate"></label>
+      </div>
+      <div class="row2">
+        <div class="field"><label class="label" for="lfClay">Clay body</label><select id="lfClay" data-list="clays"></select></div>
+        <label class="field"><span>Firing</span><input type="text" id="lfFiring" placeholder="e.g. Cone 6 oxidation, slow cool"></label>
+      </div>
+      <div class="field">
+        <span class="label">Glazes, in order applied</span>
+        <div id="glazeRows" class="glaze-rows"></div>
+        <div><button type="button" class="btn small" id="addGlazeRow">+ Add glaze</button></div>
+      </div>
+      <div class="photos" id="photoFields"></div>
+      <label class="field"><span>Notes</span><textarea id="lfNotes" rows="4" placeholder="Results, surprises, what to try next…"></textarea></label>
+    </div>
+    <div class="dlg-foot">
+      <span class="status" id="logStatus"></span>
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button type="submit" class="btn primary" id="logSave">Save entry</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Log entry detail -->
+<dialog id="viewDlg">
+  <div class="dlg-head"><h2 id="vTitle"></h2><button type="button" class="x" data-close aria-label="Close">×</button></div>
+  <div class="dlg-body" id="vBody"></div>
+  <div class="dlg-foot">
+    <button type="button" class="btn danger" id="vDelete">Delete</button>
+    <button type="button" class="btn primary" id="vEdit">Edit</button>
+  </div>
+</dialog>
+
+<!-- Glaze form -->
+<dialog id="glazeDlg">
+  <form id="glazeForm" method="dialog" novalidate>
+    <div class="dlg-head"><h2 id="glazeDlgTitle">New glaze</h2><button type="button" class="x" data-close aria-label="Close">×</button></div>
+    <div class="dlg-body">
+      <div class="import-box">
+        <label class="label" for="gfUrl">Fill in from the manufacturer's product page</label>
+        <div class="inline-add"><input type="url" id="gfUrl" inputmode="url" placeholder="https://www.maycocolors.com/product/sw-104-black-walnut/"><button type="button" class="btn small" id="gfFetch">Fill in</button></div>
+        <p class="meta" id="gfFetchStatus" hidden></p>
+      </div>
+      <div class="row2">
+        <div class="field"><label class="label" for="gfBrand">Brand</label><select id="gfBrand" data-list="brands"></select></div>
+        <div class="field"><label class="label" for="gfLine">Product line</label><input type="text" id="gfLine" list="gfLineList" placeholder="e.g. Stoneware, Potter's Choice" autocomplete="off"><datalist id="gfLineList"></datalist></div>
+      </div>
+      <div class="row-code">
+        <label class="field"><span>Code</span><input type="text" id="gfCode" placeholder="SW-104"></label>
+        <label class="field"><span>Name</span><input type="text" id="gfName" placeholder="e.g. Black Walnut"></label>
+      </div>
+      <div class="field"><label class="label" for="gfType">Type</label><select id="gfType" data-list="types"></select></div>
+      <div class="field">
+        <label class="label" for="gfColor">Color</label>
+        <div class="color-row"><input type="color" id="gfColor" value="#5f8f86"><svg viewBox="0 0 60 80" id="gfPreview" aria-hidden="true"></svg><span class="meta" id="gfHex"></span><button type="button" class="btn small" id="gfPick" hidden>Use image color</button></div>
+      </div>
+      <div class="field" id="gfImageField" hidden>
+        <span class="label">Product image</span>
+        <div class="glaze-image"><img id="gfImage" alt="Product image"><button type="button" class="btn small" id="gfImageRemove">Remove image</button></div>
+      </div>
+      <label class="field"><span>Description</span><textarea id="gfDesc" rows="3" placeholder="Firing range, finish, layering tips…"></textarea></label>
+      <p class="meta" id="gfSource" hidden></p>
+      <p class="meta" id="gfUsage" hidden></p>
+    </div>
+    <div class="dlg-foot">
+      <span class="status" id="glazeStatus"></span>
+      <button type="button" class="btn danger" id="gfDelete" hidden>Delete</button>
+      <button type="button" class="btn" id="gfShow" hidden>Show entries</button>
+      <button type="submit" class="btn primary">Save glaze</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Manufacturer catalogs -->
+<dialog id="catalogDlg" class="wide">
+  <form id="catalogForm" method="dialog" novalidate>
+    <div class="dlg-head"><h2>Manufacturer catalogs</h2><button type="button" class="x" data-close aria-label="Close">×</button></div>
+    <div class="dlg-body">
+      <div class="row2">
+        <div class="field"><label class="label" for="ctSource">Manufacturer</label><select id="ctSource"></select></div>
+        <div class="field"><label class="label" for="ctLine">Product line</label><select id="ctLine" disabled><option>Choose a manufacturer first</option></select></div>
+      </div>
+      <p class="meta" id="ctMsg" style="margin:0"></p>
+      <div class="ct-tools" id="ctTools" hidden>
+        <input type="text" id="ctSearch" placeholder="Filter by name or code" aria-label="Filter glazes in this line">
+        <label class="check"><input type="checkbox" id="ctAll"> Select all shown</label>
+        <span class="meta" id="ctCount"></span>
+      </div>
+      <div id="ctItems" class="ct-items"></div>
+      <div class="field" id="ctTypeField" hidden><label class="label" for="ctType">Type for the imported glazes</label><select id="ctType"></select></div>
+    </div>
+    <div class="dlg-foot">
+      <span class="status" id="ctStatus"></span>
+      <button type="button" class="btn" data-close>Close</button>
+      <button type="submit" class="btn primary" id="ctGo" disabled>Import selected</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Bulk import -->
+<dialog id="importDlg">
+  <form id="importForm" method="dialog" novalidate>
+    <div class="dlg-head"><h2>Import glazes from links</h2><button type="button" class="x" data-close aria-label="Close">×</button></div>
+    <div class="dlg-body">
+      <p class="meta" style="margin:0">Paste product page links from manufacturer sites, one per line. Each glaze gets its name, code, brand, description and image from the page, and a color estimated from the image. Glazes already in your catalog are skipped.</p>
+      <label class="field"><span>Links</span><textarea id="imUrls" rows="6" placeholder="https://www.maycocolors.com/product/sw-104-black-walnut/&#10;https://shop.amaco.com/pc-20-blue-rutile/&#10;https://www.freeformclay.com/midfireglaze/wc110"></textarea></label>
+      <div class="field"><label class="label" for="imType">Type for these glazes</label><select id="imType"></select></div>
+      <ul id="imResults" class="im-results" hidden></ul>
+    </div>
+    <div class="dlg-foot">
+      <span class="status" id="importStatus"></span>
+      <button type="button" class="btn" data-close>Close</button>
+      <button type="submit" class="btn primary" id="imGo">Import</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "glaze-journal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Glaze catalog and firing log for test tiles and pieces.",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "icons": "node tools/make-icons.mjs"
+  }
+}

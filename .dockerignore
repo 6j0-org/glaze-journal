@@ -1,0 +1,6 @@
+data/
+node_modules/
+tools/
+glaze-journal.html
+*.md
+.git
