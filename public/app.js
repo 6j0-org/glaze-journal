@@ -758,9 +758,14 @@ import {
   let editingLog = null;
   const pendingPhotos = { pre: undefined, post: undefined }; // undefined = unchanged, null = removed, File = new
 
-  function glazeOptions(selected) {
-    const sorted = [...state.glazes].sort((a, b) => byText(glazeLabel(a), glazeLabel(b)));
-    let opts = `<option value="" disabled ${selected ? "" : "selected"}>Choose a glaze…</option>`;
+  // Every whitespace-separated term must appear somewhere in the glaze's brand, line, code, name, or type.
+  function glazeMatches(g, query) {
+    const hay = [g.brand, g.line, g.code, g.name, g.type].filter(Boolean).join(" ").toLowerCase();
+    return query.toLowerCase().split(/\s+/).filter(Boolean).every((t) => hay.includes(t));
+  }
+  function glazeOptions(selected, query = "") {
+    const sorted = [...state.glazes].filter((g) => glazeMatches(g, query)).sort((a, b) => byText(glazeLabel(a), glazeLabel(b)));
+    let opts = `<option value="" disabled ${selected ? "" : "selected"}>${query && !sorted.length ? "No glazes match" : "Choose a glaze…"}</option>`;
     if (selected && !glazeById(selected)) opts += `<option value="${esc(selected)}" selected>Deleted glaze</option>`;
     const brands = [...new Set(sorted.map((g) => g.brand))].sort(byText);
     return opts + brands.map((b) => `<optgroup label="${esc(b)}">${sorted.filter((g) => g.brand === b).sort((x, y) => byText(x.line || "", y.line || "") || (x.code || "").localeCompare(y.code || "", undefined, { numeric: true }) || byText(x.name, y.name)).map((g) => `<option value="${esc(g.id)}" ${g.id === selected ? "selected" : ""}>${esc([g.code, g.name].filter(Boolean).join(" "))}${g.line ? ` · ${esc(g.line)}` : ""}${g.type ? ` (${esc(g.type)})` : ""}</option>`).join("")}</optgroup>`).join("");
@@ -773,17 +778,30 @@ import {
     row.dataset.snapshot = JSON.stringify(item);
     const color = item.glazeId ? resolveGlaze(item).color : "transparent";
     row.innerHTML = `<div class="top"><i class="dot" style="width:18px;height:18px;background:${esc(color)}"></i>
-      <select id="gr-glaze-${i}" aria-label="Glaze">${glazeOptions(item.glazeId)}</select>
+      <input type="search" id="gr-search-${i}" class="glaze-search" aria-label="Search glazes" aria-controls="gr-glaze-${i}" placeholder="Search glazes by name, code, brand, or line" autocomplete="off">
       <button type="button" class="x" aria-label="Remove this glaze">×</button></div>
+      <select id="gr-glaze-${i}" aria-label="Glaze">${glazeOptions(item.glazeId)}</select>
       <textarea id="gr-app-${i}" rows="2" aria-label="How it was applied" placeholder="How it was applied: e.g. 3 brushed coats, dipped 2 s, sprayed over rim, wax resist foot…">${esc(item.application || "")}</textarea>`;
-    row.querySelector("select").addEventListener("change", (e) => { const g = glazeById(e.target.value); row.querySelector(".dot").style.background = g ? g.color : "transparent"; });
+    const sel = row.querySelector("select"), search = row.querySelector(".glaze-search");
+    const syncDot = () => { const g = glazeById(sel.value); row.querySelector(".dot").style.background = g ? g.color : "transparent"; };
+    sel.addEventListener("change", syncDot);
+    // Narrow the dropdown as you type; if the current pick is filtered out, take the first match so Tab moves on with it.
+    search.addEventListener("input", () => {
+      const keep = sel.value;
+      sel.innerHTML = glazeOptions(keep, search.value);
+      const opts = [...sel.options].filter((o) => o.value && !o.disabled);
+      if (opts.some((o) => o.value === keep)) sel.value = keep;
+      else if (opts.length) sel.value = opts[0].value;
+      syncDot();
+    });
+    search.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); sel.focus(); } });
     row.querySelector(".x").addEventListener("click", () => row.remove());
     $("#glazeRows").append(row);
     return row;
   }
   $("#addGlazeRow").addEventListener("click", () => {
     if (!state.glazes.length) { setStatus("#logStatus", "Your glaze catalog is empty. Add glazes on the Glazes tab first.", true); return; }
-    addGlazeRow().querySelector("select").focus();
+    addGlazeRow().querySelector(".glaze-search").focus();
   });
 
   function photoField(key, label, existing) {
@@ -827,7 +845,7 @@ import {
     editingLog = l;
     pendingPhotos.pre = undefined; pendingPhotos.post = undefined;
     $("#logDlgTitle").textContent = l ? "Edit log entry" : "New log entry";
-    (l?.kind === "piece" ? $("#kindPiece") : $("#kindTile")).checked = true;
+    (l?.kind === "tile" ? $("#kindTile") : $("#kindPiece")).checked = true;
     $("#lfTitle").value = l?.title || "";
     $("#lfDate").value = l?.date || today();
     fillListSelect($("#lfClay"), l?.clay || state.lists.clays[0] || "");

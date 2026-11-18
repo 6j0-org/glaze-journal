@@ -190,8 +190,8 @@ textarea { resize: vertical; min-height: 64px; }
     <div class="dlg-head"><h2 id="logDlgTitle">New log entry</h2><button type="button" class="x" data-close aria-label="Close">×</button></div>
     <div class="dlg-body">
       <div class="seg" role="radiogroup" aria-label="Entry type">
-        <label><input type="radio" name="kind" value="tile" id="kindTile" checked> Test tile</label>
-        <label><input type="radio" name="kind" value="piece" id="kindPiece"> Piece</label>
+        <label><input type="radio" name="kind" value="tile" id="kindTile"> Test tile</label>
+        <label><input type="radio" name="kind" value="piece" id="kindPiece" checked> Piece</label>
       </div>
       <div class="row2">
         <label class="field"><span>Name</span><input type="text" id="lfTitle" placeholder="e.g. Celadon over Blue Rutile, or Breakfast bowl #3"></label>
@@ -647,7 +647,7 @@ textarea { resize: vertical; min-height: 64px; }
     editingLog = l;
     pendingPhotos.pre = undefined; pendingPhotos.post = undefined;
     $("#logDlgTitle").textContent = l ? "Edit log entry" : "New log entry";
-    (l?.kind === "piece" ? $("#kindPiece") : $("#kindTile")).checked = true;
+    (l?.kind === "tile" ? $("#kindTile") : $("#kindPiece")).checked = true;
     $("#lfTitle").value = l?.title || "";
     $("#lfDate").value = l?.date || today();
     fillListSelect($("#lfClay"), l?.clay || state.lists.clays[0] || "");
