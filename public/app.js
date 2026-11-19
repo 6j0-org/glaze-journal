@@ -1,5 +1,6 @@
 import {
   loadKey, clearKey, encryptRecord, decryptRecord, encryptPhoto, decryptPhoto, startIdSignIn, finishIdSignIn, hasIdCallback,
+  createDemoAccount,
 } from "/secure.js";
 
 (() => {
@@ -18,6 +19,7 @@ import {
     canUpload: true,
     auth: "unknown", // "unknown" | "in" | "out" | "locked" (signed in, but this device doesn't have the journal key)
     authError: "",
+    demo: false, // server DEMO=1: no sign-in; each browser gets its own throwaway journal, filled in by demo.js
   };
   let store = null;
 
@@ -63,6 +65,10 @@ import {
   }
   const photoUrl = async (p) => (p?.product ? productSrc(p) : !p?.id ? "" : photoCache.get(p.id)?.url || (await (photoCache.get(p.id)?.promise || loadPhoto(p.id))));
   const photoImg = (p, attrs = "") => p.product ? `<img src="${esc(photoSrc(p))}" loading="lazy" ${attrs}>` : `<img data-pid="${esc(p.id)}" src="${esc(photoSrc(p))}" ${attrs}>`;
+  // A log entry's photos for one stage ("pre" or "post"): a list now, a single photo in entries from before that.
+  const STAGES = { pre: "Before firing", post: "After firing" };
+  const MAX_LOG_PHOTOS = 60; // matches the server's limit per entry
+  const stagePhotos = (l, key) => (Array.isArray(l?.[key]) ? l[key] : l?.[key] ? [l[key]] : []).filter((p) => p?.id);
   function seedPhoto(id, blob) { const url = URL.createObjectURL(blob); photoCache.set(id, { url, promise: Promise.resolve(url) }); }
   function clearPhotos() { for (const c of photoCache.values()) if (c.url) URL.revokeObjectURL(c.url); photoCache.clear(); }
   function resolveGlaze(item) {
@@ -108,7 +114,7 @@ import {
       subs.glazes.forEach((f) => f(snap.glazes));
       subs.logs.forEach((f) => f(snap.logs));
     }
-    const photoIds = (c, doc) => (c === "logs" ? [doc.pre?.id, doc.post?.id] : c === "glazes" ? [doc.image?.id] : []).filter(Boolean);
+    const photoIds = (c, doc) => (c === "logs" ? [...stagePhotos(doc, "pre"), ...stagePhotos(doc, "post")].map((p) => p.id) : c === "glazes" ? [doc.image?.id] : []).filter(Boolean);
     async function putRecord(c, id, doc) {
       if (c === "config") return api("PUT", "/api/lists", { enc: await encryptRecord("config", "lists", doc) });
       return api("PUT", `/api/${c}/${encodeURIComponent(id)}`, { enc: await encryptRecord(c, id, doc), photos: photoIds(c, doc) });
@@ -211,17 +217,39 @@ import {
 
   function forget() {
     state.glazes = []; state.logs = []; state.lists = clone(DEFAULTS);
-    clearPhotos(); clearKey();
+    clearPhotos();
+    const cleared = clearKey();
     document.querySelectorAll("dialog[open]").forEach((d) => d.close());
     showBanner(""); showAuthUi(); render();
+    return cleared;
   }
-  function signedOut() { if (state.auth !== "out") { state.auth = "out"; forget(); } }
+  function signedOut() { if (state.demo) startDemo(); else if (state.auth !== "out") { state.auth = "out"; forget(); } }
   // Signed in, but this device has no journal key (e.g. the browser cleared site storage): sign in again for it.
-  function locked() { if (state.auth !== "locked") { state.auth = "locked"; forget(); } }
+  function locked() { if (state.demo) startDemo(); else if (state.auth !== "locked") { state.auth = "locked"; forget(); } }
+
+  // Demo mode: whenever there's no journal (first visit, "Start over", or the server pruned this visitor's
+  // account), make a new demo account and fill it in with demo glazes and entries (public/demo.js).
+  let demoStarting = null;
+  function startDemo() {
+    return (demoStarting ||= (async () => {
+      try {
+        state.auth = "unknown";
+        await forget();
+        $("#view").innerHTML = `<p class="loading">Setting up a demo journal…</p>`;
+        await createDemoAccount(api);
+        await store.refresh();
+        const { seedDemo } = await import("/demo.js");
+        await seedDemo(store, clone(DEFAULTS), showBanner);
+        showBanner("");
+      } catch (e) { showBanner("Couldn't set up the demo: " + (e?.message || "try reloading the page.")); }
+      finally { demoStarting = null; }
+    })());
+  }
 
   function showAuthUi() {
     $("nav.tabs").hidden = state.auth !== "in";
     $("#signOut").hidden = state.auth !== "in" && state.auth !== "locked";
+    if (state.demo) { $("#signOut").textContent = "Start over"; $("#signOut").title = "Demo: replace this journal with a fresh demo one"; }
   }
 
   function renderSignIn() {
@@ -298,12 +326,13 @@ import {
   }
 
   function logCard(l) {
-    const img = l.post?.id ? l.post : l.pre?.id ? l.pre : null;
+    const pre = stagePhotos(l, "pre"), post = stagePhotos(l, "post"), count = pre.length + post.length;
+    const img = post[0] || pre[0] || null;
     const glazes = (l.glazes || []).map(resolveGlaze);
     return `<button class="card" data-log="${esc(l.id)}">
       <div class="photo">${img ? photoImg(img, 'alt=""') : "No photo yet"}
         <span class="kind">${l.kind === "piece" ? "Piece" : "Test tile"}</span>
-        ${img ? `<span class="stage">${img === l.post ? "After firing" : "Before firing"}</span>` : ""}</div>
+        ${img ? `<span class="stage">${img === post[0] ? "After firing" : "Before firing"}${count > 1 ? ` · ${count} photos` : ""}</span>` : ""}</div>
       <div class="card-body">
         <h3>${esc(l.title || (l.kind === "piece" ? "Untitled piece" : "Untitled tile"))}</h3>
         <div class="meta">${esc([fmtDate(l.date), l.clay].filter(Boolean).join(" · "))}</div>
@@ -756,7 +785,8 @@ import {
 
   // ----- log form -----
   let editingLog = null;
-  const pendingPhotos = { pre: undefined, post: undefined }; // undefined = unchanged, null = removed, File = new
+  // Photos in the open form, per stage, in order: { id } already saved, or { file, url } picked in this form.
+  const draftPhotos = { pre: [], post: [] };
 
   // Every whitespace-separated term must appear somewhere in the glaze's brand, line, code, name, or type.
   function glazeMatches(g, query) {
@@ -804,46 +834,46 @@ import {
     addGlazeRow().querySelector(".glaze-search").focus();
   });
 
-  function photoField(key, label, existing) {
-    const url = Boolean(existing?.id);
-    return `<div class="field"><span class="label">${label}</span>
-      <label class="drop" id="drop-${key}">${url ? photoImg(existing, 'alt=""') : ""}
-        <span>${url ? "" : "Add photo<br><small>Tap to choose or take one</small>"}</span>
-        <input type="file" accept="image/*" id="file-${key}" data-photo="${key}">
-        ${url ? `<button type="button" class="btn small clear" data-clear="${key}">Remove</button>` : ""}
-      </label></div>`;
+  const dropHint = (list) => `<span>${list.length ? "+ Add more" : "+ Add photos"}<br><small>Tap to choose or take some</small></span>`;
+  function renderPhotoStage(key) {
+    const list = draftPhotos[key];
+    $("#stage-" + key).innerHTML = list.map((p, i) => `<div class="thumb">${p.file ? `<img src="${esc(p.url)}" alt="">` : photoImg(p, 'alt=""')}
+        <button type="button" class="open" data-view="${key}" data-i="${i}" aria-label="View ${STAGES[key].toLowerCase()} photo ${i + 1}"></button>
+        <button type="button" class="remove" data-remove="${key}" data-i="${i}" aria-label="Remove ${STAGES[key].toLowerCase()} photo ${i + 1}">×</button></div>`).join("")
+      + `<label class="drop add">${dropHint(list)}<input type="file" accept="image/*" multiple data-photo="${key}"></label>`;
   }
   function renderPhotoFields(l) {
+    for (const k in draftPhotos) {
+      draftPhotos[k].forEach((p) => p.url && URL.revokeObjectURL(p.url));
+      draftPhotos[k] = stagePhotos(l, k).map((p) => ({ id: p.id }));
+    }
     if (!state.canUpload) { $("#photoFields").innerHTML = `<p class="meta">Only editors of this page can add photos.</p>`; return; }
-    $("#photoFields").innerHTML = photoField("pre", "Before firing", l?.pre) + photoField("post", "After firing", l?.post);
+    $("#photoFields").innerHTML = Object.entries(STAGES).map(([k, label]) => `<div class="field"><span class="label">${label}</span><div class="thumbs" id="stage-${k}"></div></div>`).join("");
+    for (const k in STAGES) renderPhotoStage(k);
   }
   $("#photoFields").addEventListener("change", (e) => {
-    const key = e.target.dataset.photo, file = e.target.files?.[0];
-    if (!key || !file) return;
-    pendingPhotos[key] = file;
-    const drop = $("#drop-" + key);
-    drop.querySelector("img")?.remove();
-    drop.querySelector("span").innerHTML = "";
-    const img = document.createElement("img"); img.alt = ""; img.src = URL.createObjectURL(file);
-    drop.prepend(img);
-    if (!drop.querySelector(".clear")) drop.insertAdjacentHTML("beforeend", `<button type="button" class="btn small clear" data-clear="${key}">Remove</button>`);
+    const key = e.target.dataset.photo, files = [...(e.target.files || [])].filter((f) => f.type.startsWith("image/") || !f.type);
+    if (!key || !files.length) return;
+    draftPhotos[key].push(...files.map((file) => ({ file, url: URL.createObjectURL(file) })));
+    renderPhotoStage(key);
+    const total = draftPhotos.pre.length + draftPhotos.post.length;
+    setStatus("#logStatus", total > MAX_LOG_PHOTOS ? `An entry can hold up to ${MAX_LOG_PHOTOS} photos; this one has ${total}.` : "", total > MAX_LOG_PHOTOS);
   });
   $("#photoFields").addEventListener("click", (e) => {
-    const key = e.target.dataset?.clear;
-    if (!key) return;
-    e.preventDefault();
-    pendingPhotos[key] = null;
-    const drop = $("#drop-" + key);
-    drop.querySelector("img")?.remove();
-    e.target.remove();
-    drop.querySelector("input").value = "";
-    drop.querySelector("span").innerHTML = "Add photo<br><small>Tap to choose or take one</small>";
+    const view = e.target.closest("[data-view]"), remove = e.target.closest("[data-remove]");
+    if (view) {
+      const items = Object.keys(STAGES).flatMap((k) => draftPhotos[k].map((p, i) => ({ ...p, caption: `${STAGES[k]} ${i + 1} of ${draftPhotos[k].length}` })));
+      openLightbox(items, (view.dataset.view === "post" ? draftPhotos.pre.length : 0) + Number(view.dataset.i));
+    } else if (remove) {
+      const key = remove.dataset.remove, [p] = draftPhotos[key].splice(Number(remove.dataset.i), 1);
+      if (p?.url) URL.revokeObjectURL(p.url);
+      renderPhotoStage(key);
+    }
   });
 
   function openLogForm(id) {
     const l = id ? state.logs.find((x) => x.id === id) : null;
     editingLog = l;
-    pendingPhotos.pre = undefined; pendingPhotos.post = undefined;
     $("#logDlgTitle").textContent = l ? "Edit log entry" : "New log entry";
     (l?.kind === "tile" ? $("#kindTile") : $("#kindPiece")).checked = true;
     $("#lfTitle").value = l?.title || "";
@@ -880,25 +910,30 @@ import {
       firing: $("#lfFiring").value.trim(),
       glazes,
       notes: $("#lfNotes").value.trim(),
-      pre: editingLog?.pre || null,
-      post: editingLog?.post || null,
+      pre: [],
+      post: [],
       createdAt: editingLog?.createdAt || Date.now(),
       updatedAt: Date.now(),
     };
+    const total = draftPhotos.pre.length + draftPhotos.post.length;
+    if (total > MAX_LOG_PHOTOS) { setStatus("#logStatus", `An entry can hold up to ${MAX_LOG_PHOTOS} photos; remove ${total - MAX_LOG_PHOTOS} to save.`, true); return; }
     $("#logSave").disabled = true;
-    const toDelete = [];
     try {
-      for (const key of ["pre", "post"]) {
-        const p = pendingPhotos[key];
-        if (p === undefined) continue;
-        if (data[key]?.id) toDelete.push(data[key].id);
-        if (p === null) { data[key] = null; continue; }
-        setStatus("#logStatus", `Uploading ${key === "pre" ? "before" : "after"}-firing photo…`);
-        data[key] = await store.upload(await shrink(p));
+      const fresh = Object.values(draftPhotos).flat().filter((p) => p.file).length;
+      let n = 0;
+      for (const key of Object.keys(STAGES)) {
+        const list = draftPhotos[key];
+        for (let i = 0; i < list.length; i++) {
+          if (list[i].file) {
+            setStatus("#logStatus", `Uploading photo ${++n} of ${fresh}…`);
+            URL.revokeObjectURL(list[i].url);
+            list[i] = await store.upload(await shrink(list[i].file)); // kept, so a retry after a failed save doesn't upload it again
+          }
+          data[key].push({ id: list[i].id });
+        }
       }
       setStatus("#logStatus", "Saving…");
-      await store.save("logs", editingLog?.id || null, data);
-      toDelete.forEach((id) => store.deleteAsset(id));
+      await store.save("logs", editingLog?.id || null, data); // the server removes photos no entry uses any more
       $("#logDlg").close();
     } catch (err) {
       setStatus("#logStatus", "Couldn't save: " + (err?.message || "try again."), true);
@@ -913,10 +948,16 @@ import {
     if (!l) return;
     viewingId = id;
     $("#vTitle").textContent = l.title || (l.kind === "piece" ? "Untitled piece" : "Untitled tile");
-    const fig = (p, cap) => `<figure><figcaption>${cap}</figcaption><div class="photo">${p?.id ? photoImg(p, `alt="${cap} photo"`) : "No photo"}</div></figure>`;
+    // The first photo of each stage is shown large and the rest as thumbnails; any of them opens full size.
+    const fig = (key) => {
+      const ps = stagePhotos(l, key), cap = STAGES[key];
+      const btn = (p, i, cls) => `<button type="button" class="${cls}" data-lb="${key}" data-i="${i}" aria-label="View ${cap.toLowerCase()} photo ${i + 1} full size">${photoImg(p, `alt="${cap} photo ${i + 1}"`)}</button>`;
+      if (!ps.length) return `<figure><figcaption>${cap}</figcaption><div class="photo">No photo</div></figure>`;
+      return `<figure><figcaption>${cap}${ps.length > 1 ? ` · ${ps.length} photos` : ""}</figcaption>${btn(ps[0], 0, "photo")}${ps.length > 1 ? `<div class="thumbs">${ps.slice(1).map((p, i) => btn(p, i + 1, "thumb")).join("")}</div>` : ""}</figure>`;
+    };
     const glazes = (l.glazes || []).map((x) => ({ ...resolveGlaze(x), application: x.application }));
     $("#vBody").innerHTML = `
-      <div class="detail-photos">${fig(l.pre, "Before firing")}${fig(l.post, "After firing")}</div>
+      <div class="detail-photos">${fig("pre")}${fig("post")}</div>
       <dl class="dl">
         <dt>Type</dt><dd>${l.kind === "piece" ? "Piece" : "Test tile"}</dd>
         <dt>Date</dt><dd>${esc(fmtDate(l.date))}</dd>
@@ -928,6 +969,47 @@ import {
     disarm($("#vDelete"));
     $("#viewDlg").showModal();
   }
+  $("#vBody").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-lb]"), l = state.logs.find((x) => x.id === viewingId);
+    if (!b || !l) return;
+    const pre = stagePhotos(l, "pre"), post = stagePhotos(l, "post");
+    const items = [...pre.map((p, i) => ({ ...p, caption: `${STAGES.pre} ${i + 1} of ${pre.length}` })), ...post.map((p, i) => ({ ...p, caption: `${STAGES.post} ${i + 1} of ${post.length}` }))];
+    openLightbox(items, (b.dataset.lb === "post" ? pre.length : 0) + Number(b.dataset.i));
+  });
+
+  // ----- full-size photo viewer -----
+  let lbItems = [], lbIndex = 0;
+  function showLightbox() {
+    const it = lbItems[lbIndex], img = $("#lbImg");
+    if (it.url) { delete img.dataset.pid; img.src = it.url; }
+    else { img.dataset.pid = it.id; img.src = photoSrc(it); }
+    img.alt = it.caption;
+    $("#lbCap").textContent = it.caption;
+    $("#lbPrev").hidden = $("#lbNext").hidden = lbItems.length < 2;
+  }
+  function openLightbox(items, i) {
+    if (!items.length) return;
+    lbItems = items; lbIndex = Math.min(Math.max(i, 0), items.length - 1);
+    showLightbox();
+    $("#lightbox").showModal();
+  }
+  function stepLightbox(d) { lbIndex = (lbIndex + d + lbItems.length) % lbItems.length; showLightbox(); }
+  $("#lbPrev").addEventListener("click", () => stepLightbox(-1));
+  $("#lbNext").addEventListener("click", () => stepLightbox(1));
+  $("#lightbox").addEventListener("keydown", (e) => {
+    if (lbItems.length < 2) return;
+    if (e.key === "ArrowLeft") { e.preventDefault(); stepLightbox(-1); }
+    if (e.key === "ArrowRight") { e.preventDefault(); stepLightbox(1); }
+  });
+  let lbTouch = null; // swipe left or right to move between photos
+  $("#lightbox").addEventListener("touchstart", (e) => { lbTouch = e.touches.length === 1 ? e.touches[0].clientX : null; }, { passive: true });
+  $("#lightbox").addEventListener("touchend", (e) => {
+    if (lbTouch === null || lbItems.length < 2) return;
+    const dx = e.changedTouches[0].clientX - lbTouch; lbTouch = null;
+    if (Math.abs(dx) > 50) stepLightbox(dx < 0 ? 1 : -1);
+  });
+  $("#lightbox").addEventListener("close", () => { $("#lbImg").removeAttribute("src"); delete $("#lbImg").dataset.pid; lbItems = []; });
+
   $("#vEdit").addEventListener("click", () => { $("#viewDlg").close(); openLogForm(viewingId); });
   $("#vDelete").addEventListener("click", async (e) => {
     const b = e.currentTarget;
@@ -935,7 +1017,7 @@ import {
     const l = state.logs.find((x) => x.id === viewingId);
     try {
       await store.remove("logs", viewingId);
-      [l?.pre?.id, l?.post?.id].forEach((id) => id && store.deleteAsset(id));
+      [...stagePhotos(l, "pre"), ...stagePhotos(l, "post")].forEach((p) => store.deleteAsset(p.id));
       $("#viewDlg").close();
     } catch (err) { b.textContent = "Couldn't delete"; }
   });
@@ -944,6 +1026,7 @@ import {
   async function boot() {
     if (hasIdCallback()) try { await finishIdSignIn(api); } catch (e) { state.authError = e.message || "Sign-in failed."; }
     $("#signOut").addEventListener("click", signOut);
+    try { const r = await fetch("/api/config"); state.demo = r.ok && Boolean((await r.json()).demo); } catch {}
     store = apiStore();
     store.watch("config", (cfg) => {
       state.lists = cfg ? { brands: cfg.brands || [], types: cfg.types || [], clays: cfg.clays || [] } : clone(DEFAULTS);

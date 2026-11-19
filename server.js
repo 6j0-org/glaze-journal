@@ -7,6 +7,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import os from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { importProduct, fetchImage, ImportError } from "./importer.js";
 import { SOURCES, sourceById, linesByBrand, completeItem } from "./catalog.js";
@@ -14,7 +15,16 @@ import { verifyIdToken, IdTokenError } from "./idtoken.js";
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
-const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
+// DEMO=1 runs a throwaway demo with no sign-in: every browser gets its own account (public/demo.js fills it in),
+// the database is in memory, and photos go to a temporary folder that's deleted on exit. DATA_DIR and the ID_*
+// variables are ignored. For trying the app out and for the tests (test/run.mjs), never for real use.
+const DEMO = /^(1|true|yes|on)$/i.test(process.env.DEMO || "");
+const DATA_DIR = DEMO ? fs.mkdtempSync(path.join(os.tmpdir(), "glaze-journal-demo-")) : path.resolve(process.env.DATA_DIR || "data");
+if (DEMO) {
+  const cleanup = () => fs.rmSync(DATA_DIR, { recursive: true, force: true });
+  process.on("exit", cleanup);
+  for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => process.exit(0));
+}
 const PHOTO_DIR = path.join(DATA_DIR, "photos");
 const PRODUCT_DIR = path.join(DATA_DIR, "products");
 const PUBLIC_DIR = path.join(import.meta.dirname, "public");
@@ -27,7 +37,7 @@ const SESSION_DAYS = 30;
 // fetched from (e.g. an in-cluster Service URL). ORIGIN (e.g. https://glaze.6j0.org) turns on Secure cookies.
 // Journals made before sign-in existed are unencrypted and belong to nobody until claimed: by the identity
 // ID_OWNER_SUB if it is set, otherwise by the first account that signs in. The owner's browser then encrypts them.
-const ID = (() => {
+const ID = DEMO ? null : (() => {
   const origin = process.env.ID_ORIGIN || "";
   if (!origin || new URL(origin).origin !== origin) throw new Error("ID_ORIGIN is required, e.g. ID_ORIGIN=https://id.6j0.org");
   return { origin, app: process.env.ID_APP || "glaze-journal", jwksUrl: process.env.ID_JWKS_URL || `${origin}/.well-known/jwks.json` };
@@ -35,6 +45,7 @@ const ID = (() => {
 const SECURE_COOKIE = String(process.env.ORIGIN || "").startsWith("https:") ? "; Secure" : "";
 const OWNER_SUB = process.env.ID_OWNER_SUB || "";
 const UNCLAIMED = 0; // user_id of data from before sign-in existed
+const MAX_DEMO_VISITORS = 5000;
 const MAX_JSON_BYTES = 1024 * 1024;
 
 // Encrypted photos are stored as application/octet-stream. The image types are for unencrypted photos from before
@@ -52,7 +63,7 @@ const STATIC_TYPES = {
 };
 fs.mkdirSync(PHOTO_DIR, { recursive: true });
 fs.mkdirSync(PRODUCT_DIR, { recursive: true });
-const db = new DatabaseSync(path.join(DATA_DIR, "glaze-journal.db"));
+const db = new DatabaseSync(DEMO ? ":memory:" : path.join(DATA_DIR, "glaze-journal.db"));
 // These CREATE TABLEs are the original schema and never change. Every change since is a numbered migration below,
 // tracked in PRAGMA user_version. Append new ones; never edit or reorder old ones.
 db.exec(`
@@ -131,6 +142,11 @@ const q = {
   session: db.prepare("SELECT user_id FROM sessions WHERE token_hash = ? AND created > ?"),
   delSession: db.prepare("DELETE FROM sessions WHERE token_hash = ?"),
   oldSessions: db.prepare("DELETE FROM sessions WHERE created <= ?"),
+  userCount: db.prepare("SELECT COUNT(*) n FROM users"),
+  oldUsers: db.prepare("SELECT id FROM users WHERE created < ?"),
+  userPhotos: db.prepare("SELECT id, type FROM photos WHERE user_id = ?"),
+  delUserDocs: db.prepare("DELETE FROM docs WHERE user_id = ?"),
+  delUser: db.prepare("DELETE FROM users WHERE id = ?"),
 };
 
 const listDocs = (uid, coll) => q.all.all(uid, coll).map((r) => ({ id: r.id, ...JSON.parse(r.data) }));
@@ -147,10 +163,11 @@ function cleanPhoto(id, uid) {
   return id;
 }
 // A stored record: the browser's ciphertext plus the IDs of the photos it uses, so unused photos can be cleaned up.
+const MAX_RECORD_PHOTOS = 60; // per log entry, before and after firing combined
 function cleanRecord(b, uid) {
   if (!isSealed(b.enc)) throw new HttpError(400, "Expected an encrypted record.");
   const photos = [...new Set(Array.isArray(b.photos) ? b.photos : [])];
-  if (photos.length > 3) throw new HttpError(400, "Too many photos.");
+  if (photos.length > MAX_RECORD_PHOTOS) throw new HttpError(400, `Too many photos: an entry can hold up to ${MAX_RECORD_PHOTOS}.`);
   return { enc: b.enc, photos: photos.map((id) => cleanPhoto(id, uid)) };
 }
 // Photo IDs a stored record uses: encrypted records list them; unencrypted ones from before encryption hold them inline.
@@ -213,12 +230,22 @@ function sweepOrphans() {
   const used = referencedPhotoIds();
   for (const r of q.oldPhotos.all(Date.now() - 24 * 3600 * 1000)) if (!used.has(r.id)) deletePhoto(r.id, r.type);
 }
+// Demo visitors' accounts, journals, and photos are deleted after a day.
+const DEMO_VISITOR_MS = 24 * 3600 * 1000;
+function pruneDemoVisitors() {
+  for (const { id } of q.oldUsers.all(Date.now() - DEMO_VISITOR_MS)) {
+    for (const r of q.userPhotos.all(id)) deletePhoto(r.id, r.type);
+    q.delUserDocs.run(id);
+    q.delUser.run(id); // and its sessions (ON DELETE CASCADE)
+  }
+}
 function sweep() {
+  if (DEMO) pruneDemoVisitors();
   sweepOrphans();
   q.oldSessions.run(Date.now() - SESSION_DAYS * 86400 * 1000);
 }
 sweep();
-setInterval(sweep, 6 * 3600 * 1000).unref();
+setInterval(sweep, (DEMO ? 1 : 6) * 3600 * 1000).unref();
 
 // ---------- accounts & sessions ----------
 // The session cookie holds a random token; the database stores only its SHA-256.
@@ -308,10 +335,19 @@ async function handle(req, res) {
   if (p === "/healthz") return send(res, 200, { ok: true });
 
   // ---------- sign-in (no session needed) ----------
-  if (p === "/api/config" && req.method === "GET") return send(res, 200, { idOrigin: ID.origin, idApp: ID.app });
+  if (p === "/api/config" && req.method === "GET") return send(res, 200, DEMO ? { demo: true } : { idOrigin: ID.origin, idApp: ID.app });
+
+  // Demo mode: a new, empty account for this browser, signed in. The browser then sets its journal key (PUT
+  // /api/key) and fills the journal in with demo entries (public/demo.js), as it would any journal.
+  if (p === "/api/demo/register" && req.method === "POST" && DEMO) {
+    if (q.userCount.get().n >= MAX_DEMO_VISITORS) throw new HttpError(503, "The demo is full right now. Please try again later.");
+    const guid = crypto.randomUUID();
+    const uid = Number(q.addUser.run("demo:" + guid, guid, Date.now()).lastInsertRowid);
+    return send(res, 200, { guid }, { "Set-Cookie": newSessionCookie(uid), "Cache-Control": "no-store" });
+  }
 
   // The browser came back from ID_ORIGIN/authorize with a signed token for the nonce it made.
-  if (p === "/api/id/login" && req.method === "POST") {
+  if (p === "/api/id/login" && req.method === "POST" && !DEMO) {
     const body = await readJson(req);
     let claims;
     try {
@@ -475,5 +511,6 @@ http.createServer((req, res) => {
     if (!res.headersSent) send(res, err.status || 500, { error: err.status ? err.message : "Something went wrong on the server." });
   });
 }).listen(PORT, HOST, () => {
-  console.log(`Glaze Journal on http://${HOST}:${PORT}  (data: ${DATA_DIR}, sign-in: ${ID.origin} as "${ID.app}")`);
+  console.log(DEMO ? `Glaze Journal demo on http://${HOST}:${PORT}  (no sign-in; nothing is kept after it stops)`
+    : `Glaze Journal on http://${HOST}:${PORT}  (data: ${DATA_DIR}, sign-in: ${ID.origin} as "${ID.app}")`);
 });

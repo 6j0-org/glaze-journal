@@ -171,3 +171,18 @@ export async function finishIdSignIn(api) {
     raw.fill(0);
   }
 }
+
+// ---------- demo mode (server DEMO=1) ----------
+// No sign-in: a new account whose journal key is wrapped under a random key-encryption key that's thrown away, so
+// nothing could ever unwrap it again. The journal key stays in IndexedDB as after any sign-in; once it's gone, the
+// page starts over with a new demo account.
+export async function createDemoAccount(api) {
+  const { guid } = await api("POST", "/api/demo/register", {});
+  const kek = await subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  const raw = crypto.getRandomValues(new Uint8Array(32));
+  try {
+    await api("PUT", "/api/key", { wrappedKey: await seal(kek, raw) });
+    await installKey(guid, await subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]));
+  } finally { raw.fill(0); }
+  return { guid };
+}

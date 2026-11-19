@@ -1,6 +1,7 @@
 data/
 node_modules/
 tools/
+test/
 glaze-journal.html
 *.md
 .git

@@ -185,7 +185,15 @@ textarea { resize: vertical; min-height: 64px; }
 .glaze-row { border: 1px solid var(--line); border-radius: var(--r); padding: 10px; display: grid; gap: 8px; background: var(--bg); }
 .glaze-row .top { display: flex; gap: 8px; align-items: center; }
 .glaze-row .top .glaze-search { flex: 1; min-width: 0; }
-.photos { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+.photos { display: grid; gap: 14px; }
+.thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.thumb { aspect-ratio: 1; position: relative; overflow: hidden; border-radius: 8px; background: var(--sunk); border: 0; padding: 0; display: block; width: 100%; }
+.thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb .open, button.thumb, button.photo { cursor: zoom-in; }
+.thumb .open { position: absolute; inset: 0; border: 0; padding: 0; background: none; }
+.thumb .open:focus-visible, button.thumb:focus-visible, button.photo:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.thumb .remove { position: absolute; top: 4px; right: 4px; z-index: 1; width: 26px; height: 26px; border-radius: 50%; border: 0; background: rgb(0 0 0 / .6); color: #fff; font-size: 1rem; line-height: 1; cursor: pointer; }
+.thumbs .drop.add { aspect-ratio: 1; font-size: .8rem; padding: 4px; }
 .drop { border: 1.5px dashed var(--line); border-radius: var(--r); aspect-ratio: 4 / 3; max-width: 100%; display: grid; place-items: center; text-align: center; cursor: pointer; color: var(--muted); font-size: .88rem; overflow: hidden; position: relative; background: var(--bg); }
 .drop img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .drop input { position: absolute; opacity: 0; width: 1px; height: 1px; }
@@ -199,6 +207,20 @@ textarea { resize: vertical; min-height: 64px; }
 .detail-photos figure { margin: 0; display: grid; gap: 6px; }
 .detail-photos figcaption { font-size: .78rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
 .detail-photos .photo { border-radius: var(--r); overflow: hidden; }
+button.photo { border: 0; padding: 0; width: 100%; font: inherit; }
+
+/* Full-size photo viewer: the whole photo, uncropped. Clicking around it closes it. */
+dialog.lightbox { width: 100vw; height: 100dvh; max-width: none; max-height: none; border-radius: 0; background: rgb(0 0 0 / .95); color: #fff; box-shadow: none; padding: 48px 12px 40px; }
+dialog.lightbox[open] { display: flex; align-items: center; justify-content: center; }
+dialog.lightbox::backdrop { background: rgb(0 0 0 / .6); }
+.lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.lightbox .lb-close { position: absolute; top: 8px; right: 10px; color: #fff; font-size: 1.8rem; padding: 4px 10px; }
+.lightbox .lb-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 44px; border-radius: 50%; border: 0; background: rgb(255 255 255 / .16); color: #fff; font-size: 1.5rem; cursor: pointer; }
+.lightbox .lb-nav:hover { background: rgb(255 255 255 / .28); }
+.lightbox .lb-nav[hidden] { display: none; }
+.lightbox #lbPrev { left: 10px; }
+.lightbox #lbNext { right: 10px; }
+.lightbox .lb-cap { position: absolute; bottom: 10px; left: 0; right: 0; text-align: center; font-size: .85rem; color: rgb(255 255 255 / .8); }
 .dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
 .dl dt { color: var(--muted); font-size: .85rem; }
 .dl dd { margin: 0; }
@@ -277,6 +299,15 @@ textarea { resize: vertical; min-height: 64px; }
     <button type="button" class="btn danger" id="vDelete">Delete</button>
     <button type="button" class="btn primary" id="vEdit">Edit</button>
   </div>
+</dialog>
+
+<!-- Full-size photo viewer -->
+<dialog id="lightbox" class="lightbox" aria-label="Photo">
+  <button type="button" class="x lb-close" data-close aria-label="Close">×</button>
+  <img id="lbImg" alt="">
+  <button type="button" class="lb-nav" id="lbPrev" aria-label="Previous photo">‹</button>
+  <button type="button" class="lb-nav" id="lbNext" aria-label="Next photo">›</button>
+  <div class="lb-cap" id="lbCap"></div>
 </dialog>
 
 <!-- Glaze form -->

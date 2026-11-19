@@ -1,8 +1,8 @@
 # Glaze Journal
 
 A pottery glaze catalog and firing log. Catalog your glazes (brand, name, type, color), then log
-test tiles and pieces with the clay body, the glazes used and how each was applied, before- and
-after-firing photos, and notes. Brands, glaze types and clay bodies are editable lists.
+test tiles and pieces with the clay body, the glazes used and how each was applied, any number of
+before- and after-firing photos (tap one to see it full size), and notes. Brands, glaze types and clay bodies are editable lists.
 
 **Manufacturer catalogs:** "Browse manufacturer catalogs" on the Glazes tab lists real product
 lines and their glazes, with photos where the manufacturer provides them. Tick glazes (or "Select all"),
@@ -39,7 +39,7 @@ cache on disk) serves the app and its JSON API. On a phone, use "Add to Home Scr
 ID_ORIGIN=https://id.6j0.org npm start   # http://localhost:3000
 ```
 
-Requires Node 24 or newer. The identity server must list this app in its `APPS`, with the origin people open it at
+Requires Node 24 or newer. To try it without an identity server, see [Demo mode](#demo-mode). The identity server must list this app in its `APPS`, with the origin people open it at
 (e.g. `APPS=glaze-journal=https://glaze.6j0.org`), since it only sends sign-ins back to that origin.
 
 | Variable       | Default  | Purpose                                             |
@@ -47,11 +47,41 @@ Requires Node 24 or newer. The identity server must list this app in its `APPS`,
 | `PORT`         | `3000`   | Listen port                                         |
 | `HOST`         | `0.0.0.0`| Listen address                                      |
 | `DATA_DIR`     | `./data` | SQLite database (`glaze-journal.db`) and `photos/`  |
+| `DEMO`         | unset    | `1` for [demo mode](#demo-mode): no sign-in, nothing kept. Ignores `DATA_DIR` and the `ID_*` variables. |
 | `ID_ORIGIN`    | required | The 6j0.org identity server, e.g. `https://id.6j0.org` |
 | `ID_APP`       | `glaze-journal` | This app's name in the identity server's `APPS` |
 | `ID_JWKS_URL`  | `ID_ORIGIN/.well-known/jwks.json` | Where to fetch the identity server's public keys (e.g. an in-cluster Service URL) |
 | `ID_OWNER_SUB` | unset    | The identity that gets journal data from before sign-in existed. Unset: the first account to sign in gets it. |
 | `ORIGIN`       | unset    | This app's public origin, e.g. `https://glaze.6j0.org`. `https:` turns on `Secure` cookies. |
+
+### Demo mode
+
+`npm run demo` (or `DEMO=1 npm start`) runs a throwaway demo with no sign-in, on http://localhost:3000. Each
+browser automatically gets its own account, already filled in with glazes and firing log entries, including
+entries with several before- and after-firing photos in different shapes (portrait, landscape, square, and wide)
+and one saved the way entries were before they could hold more than one photo per stage. "Start over" (in place of
+"Sign out") replaces it with a fresh one.
+
+The browser fills the journal in itself (`public/demo.js`), since only it has the journal key: it encrypts and
+saves everything through the same code as real use, and draws the photos on a canvas, each labeled
+("After 2/4 · tall") so you can tell them apart. The journal key is wrapped under a random key that's thrown away,
+so the account only works in the browser that made it.
+
+The database is in memory and photos go to a temporary folder that's deleted when the server stops; visitor
+accounts are also deleted after a day. It's for trying the app out and for the tests, never for real use.
+
+### Tests
+
+```sh
+npm test               # all of them
+npm run test:server    # the API in Node: demo accounts, keys, photo uploads and limits, accounts kept apart
+npm run test:browser   # the real UI in headless Chromium: several photos per firing, the full-size viewer, and more
+```
+
+The runner (`test/run.mjs`) starts its own demo-mode server on a free port, so nothing touches `data/`. There are no
+dependencies: the browser tests drive Chrome or Chromium over the DevTools protocol with Node's built-in WebSocket.
+Set `CHROME_BIN` if it isn't found; without one they're skipped, unless `TEST_BROWSER=1`, which makes that a
+failure. `TEST_VERBOSE=1` prints every test's output, not just the failures'.
 
 ### Sign-in
 
@@ -133,13 +163,14 @@ Everything lives in `DATA_DIR`. Copy the folder while the server is stopped, or 
 
 ## API
 
-Everything except `/api/config`, `/api/id/login`, `/api/logout`, and `/healthz` needs a session and only sees the
+Everything except `/api/config`, `/api/id/login`, `/api/demo/register`, `/api/logout`, and `/healthz` needs a session and only sees the
 signed-in account's journal. Without one it answers 401. Requests marked `Sec-Fetch-Site: cross-site` that change
 data are refused.
 
 | Method | Path                 | Body / result                                        |
 | ------ | -------------------- | ---------------------------------------------------- |
-| GET    | `/api/config`        | `{idOrigin, idApp}`                                  |
+| GET    | `/api/config`        | `{idOrigin, idApp}`, or `{demo: true}` in demo mode   |
+| POST   | `/api/demo/register` | demo mode only: a new account → `{guid}` and sets the session cookie |
 | POST   | `/api/id/login`      | `{token, nonce}` → `{guid, wrappedKey}` and sets the session cookie |
 | POST   | `/api/logout`        | ends the session                                     |
 | PUT    | `/api/key`           | `{wrappedKey}`, once per account (409 if already set) |
@@ -147,7 +178,7 @@ data are refused.
 | PUT    | `/api/lists`         | `{enc}`                                              |
 | PUT    | `/api/glazes/:id`    | `{enc, photos: [photo ids]}`; creates or replaces (the browser picks the ID) |
 | DELETE | `/api/glazes/:id`    | also deletes photos nothing else uses                |
-| PUT    | `/api/logs/:id`      | `{enc, photos: [photo ids]}`                         |
+| PUT    | `/api/logs/:id`      | `{enc, photos: [photo ids]}`, up to 60 photos        |
 | DELETE | `/api/logs/:id`      | also deletes its photos                              |
 | GET    | `/api/catalog`       | catalog sources                                      |
 | GET    | `/api/catalog/:source/lines` | product lines                                |
