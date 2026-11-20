@@ -52,7 +52,26 @@ Requires Node 24 or newer. To try it without an identity server, see [Demo mode]
 | `ID_APP`       | `glaze-journal` | This app's name in the identity server's `APPS` |
 | `ID_JWKS_URL`  | `ID_ORIGIN/.well-known/jwks.json` | Where to fetch the identity server's public keys (e.g. an in-cluster Service URL) |
 | `ID_OWNER_SUB` | unset    | The identity that gets journal data from before sign-in existed. Unset: the first account to sign in gets it. |
+| `ADMIN_SUB`    | unset    | The 6j0.org identity (its `sub`) that can delete anyone's [feedback](#feedback), and whose feedback is labeled "Developer". |
 | `ORIGIN`       | unset    | This app's public origin, e.g. `https://glaze.6j0.org`. `https:` turns on `Secure` cookies. |
+
+### Feedback
+
+The Feedback button in the header opens a page where signed-in people read everyone's feedback and post their own:
+plain text, up to 2048 characters. Posts show no author; the server files each one under the account's random
+public ID so people can delete their own. Each account can post 5 times a day, and everyone together 500 times a
+day. Set `ADMIN_SUB` to your identity's `sub` to delete anyone's posts and have yours labeled "Developer" (so you
+can answer). In the demo, each visitor sees only their own posts.
+
+Feedback is shared, so unlike the journal it isn't encrypted, and the page says so. It's kept in
+`DATA_DIR/feedback.jsonl`, one JSON object per line, appended to and never edited in place: posts, and deletions as
+`{"delete": id}` lines. Read it with `tail -f`, `grep`, or `jq`. The server loads it at startup and, if anything was
+deleted, rewrites it without the deleted posts, so deleted text is gone from the disk after the next restart.
+
+It's built to be copied into other apps: `feedback.js` (the server side: no dependencies, and nothing about this
+app's accounts, routes, or database) and `public/feedback.js` (draws the page; style it with the `fb-*` classes).
+The app wires up three routes and says who's asking (see the comments at the top of each file and the
+`/api/feedback` routes in `server.js`). `test/unit/feedback.mjs` tests the server side on its own.
 
 ### Demo mode
 
@@ -74,6 +93,7 @@ accounts are also deleted after a day. It's for trying the app out and for the t
 
 ```sh
 npm test               # all of them
+npm run test:unit      # modules on their own, with no server: feedback.js
 npm run test:server    # the API in Node: demo accounts, keys, photo uploads and limits, accounts kept apart
 npm run test:browser   # the real UI in headless Chromium: several photos per firing, the full-size viewer, and more
 ```
@@ -160,7 +180,7 @@ when `ORIGIN` is `https:`, and phones only offer "install" for HTTPS sites.
 ## Backups
 
 Everything lives in `DATA_DIR`. Copy the folder while the server is stopped, or use
-`sqlite3 data/glaze-journal.db ".backup backup.db"` plus a copy of `data/photos/` while it runs.
+`sqlite3 data/glaze-journal.db ".backup backup.db"` plus a copy of `data/photos/` and `data/feedback.jsonl` while it runs.
 
 ## API
 
@@ -187,6 +207,9 @@ data are refused.
 | GET    | `/api/catalog/lines-by-brand` | `{brand: [line names]}`                     |
 | POST   | `/api/catalog/item`  | `{item}` → glaze fields plus `{productImage, imageNote}` (the image is cached on the server) |
 | POST   | `/api/import`        | `{url}` → `{name, code, brand, description, sourceUrl, productImage, imageNote}` |
+| GET    | `/api/feedback`      | `{items: [{id, body, created, admin, mine, canDelete}], maxLength, isAdmin, demo}`, newest first |
+| POST   | `/api/feedback`      | `{body}` → the new item (400 if empty or over 2048 characters, 429 over the daily limits) |
+| DELETE | `/api/feedback/:id`  | your own, or anyone's for `ADMIN_SUB`                |
 | POST   | `/api/photos`        | encrypted photo bytes as `application/octet-stream` → `{id}` |
 | GET    | `/photos/:id`        | the encrypted photo                                  |
 | GET    | `/products/:id`      | a cached product image (unencrypted, shared by all accounts) |

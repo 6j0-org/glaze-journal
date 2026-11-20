@@ -2,7 +2,7 @@
 FROM node:26-slim
 
 WORKDIR /app
-COPY package.json server.js importer.js catalog.js idtoken.js ./
+COPY package.json server.js importer.js catalog.js idtoken.js feedback.js ./
 COPY public ./public
 
 # The SQLite database (accounts and encrypted journals) and the encrypted photos live here; mount a volume to keep it.

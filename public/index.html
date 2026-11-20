@@ -230,6 +230,37 @@ dialog.lightbox::backdrop { background: rgb(0 0 0 / .6); }
 .applied .how { color: var(--muted); font-size: .9rem; white-space: pre-wrap; }
 .notes { white-space: pre-wrap; background: var(--bg); border-radius: var(--r); padding: 12px 14px; margin: 0; }
 .loading { color: var(--muted); padding: 40px 0; text-align: center; }
+
+/* Feedback page (public/feedback.js) */
+.top-actions { display: flex; gap: 8px; }
+/* Phones: logo and buttons on the first row, the tabs on their own below. */
+@media (max-width: 640px) {
+  header.top .wrap { gap: 10px 12px; }
+  nav.tabs { order: 3; width: 100%; }
+  nav.tabs a { flex: 1 0 auto; text-align: center; white-space: nowrap; padding-inline: 10px; }
+  .brand h1 { font-size: 1.15rem; }
+}
+#feedbackLink { text-decoration: none; color: inherit; }
+#feedbackLink[aria-current="page"] { border-color: var(--ink); }
+.fb { display: grid; gap: 14px; max-width: 760px; }
+.fb-title { font-size: 1.6rem; }
+.fb-intro { margin: 0; color: var(--muted); }
+.fb-form { display: grid; gap: 6px; }
+.fb-label { font-size: .8rem; font-weight: 600; color: var(--muted); }
+.fb-body { width: 100%; min-height: 110px; resize: vertical; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 8px 10px; }
+.fb-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.fb-count { color: var(--muted); font-size: .84rem; font-variant-numeric: tabular-nums; }
+.fb-status { margin-right: auto; color: var(--muted); font-size: .88rem; }
+.fb-err { color: var(--danger); }
+.fb-list { display: grid; gap: 10px; margin-top: 8px; }
+.fb-item { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; display: grid; gap: 6px; }
+.fb-mine { border-color: var(--accent); }
+.fb-meta { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; color: var(--muted); font-size: .82rem; }
+.fb-admin { color: var(--accent); }
+.fb-delete { margin-left: auto; }
+.fb-delete.fb-armed { background: var(--danger); border-color: var(--danger); color: var(--surface); }
+.fb-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.fb-empty { color: var(--muted); margin: 0; }
 .signin { max-width: 520px; margin: 40px auto 0; background: var(--surface); border-style: solid; }
 .signin .err { color: var(--danger); }
 @media (max-width: 520px) { .view-head h2 { font-size: 1.4rem; } .dl { grid-template-columns: 1fr; } .dl dt { margin-top: 6px; } }
@@ -249,7 +280,10 @@ dialog.lightbox::backdrop { background: rgb(0 0 0 / .6); }
       <a href="#glazes" data-view="glazes">Glazes</a>
       <a href="#lists" data-view="lists">Lists</a>
     </nav>
-    <button type="button" class="btn small" id="signOut" hidden>Sign out</button>
+    <div class="top-actions">
+      <a href="#feedback" class="btn small" id="feedbackLink" data-view="feedback" hidden>Feedback</a>
+      <button type="button" class="btn small" id="signOut" hidden>Sign out</button>
+    </div>
   </div>
 </header>
 

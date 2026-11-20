@@ -12,6 +12,7 @@ import { DatabaseSync } from "node:sqlite";
 import { importProduct, fetchImage, ImportError } from "./importer.js";
 import { SOURCES, sourceById, linesByBrand, completeItem } from "./catalog.js";
 import { verifyIdToken, IdTokenError } from "./idtoken.js";
+import { createFeedback, FeedbackError } from "./feedback.js";
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
@@ -44,6 +45,8 @@ const ID = DEMO ? null : (() => {
 })();
 const SECURE_COOKIE = String(process.env.ORIGIN || "").startsWith("https:") ? "; Secure" : "";
 const OWNER_SUB = process.env.ID_OWNER_SUB || "";
+// ADMIN_SUB: the 6j0.org identity that can delete anyone's feedback, and whose own feedback is labeled.
+const ADMIN_SUB = process.env.ADMIN_SUB || "";
 const UNCLAIMED = 0; // user_id of data from before sign-in existed
 const MAX_DEMO_VISITORS = 5000;
 const MAX_JSON_BYTES = 1024 * 1024;
@@ -133,6 +136,7 @@ const q = {
     ON CONFLICT (id) DO UPDATE SET type = excluded.type, size = excluded.size, fetched = excluded.fetched`),
   userBySub: db.prepare("SELECT id FROM users WHERE sub = ?"),
   user: db.prepare("SELECT guid, wrapped_key FROM users WHERE id = ?"),
+  userIdentity: db.prepare("SELECT guid, sub FROM users WHERE id = ?"),
   addUser: db.prepare("INSERT INTO users (sub, guid, created) VALUES (?, ?, ?)"),
   setKey: db.prepare("UPDATE users SET wrapped_key = ? WHERE id = ? AND wrapped_key IS NULL"),
   firstUser: db.prepare("SELECT MIN(id) id FROM users"),
@@ -174,6 +178,19 @@ function cleanRecord(b, uid) {
 const photoRefs = (d) => (Array.isArray(d?.photos) ? d.photos : [d?.pre?.id, d?.post?.id, d?.image?.id].filter(Boolean));
 // What the browser gets: ciphertext, or an unencrypted record from before encryption for it to encrypt.
 const forClient = (id, d) => (typeof d.enc === "string" ? { id, enc: d.enc } : { id, legacy: d });
+
+// ---------- feedback ----------
+// Signed-in people read everyone's feedback and post their own (feedback.js), kept in DATA_DIR/feedback.jsonl. It's
+// shared, so it isn't encrypted. Posts are filed under the account's random public guid, never shown to anyone. In the
+// demo, each visitor sees only their own, so the demo can't turn into an anonymous message board.
+const feedback = createFeedback({ file: path.join(DATA_DIR, "feedback.jsonl"), scope: DEMO ? "own" : "all" });
+function feedbackWho(uid) {
+  const u = q.userIdentity.get(uid);
+  return { user: u.guid, admin: Boolean(ADMIN_SUB) && u.sub === ADMIN_SUB };
+}
+function feedbackCall(fn) {
+  try { return fn(); } catch (e) { if (e instanceof FeedbackError) throw new HttpError(e.status, e.message); throw e; }
+}
 
 // ---------- photos ----------
 // ---------- shared product image cache ----------
@@ -425,6 +442,19 @@ async function handle(req, res) {
       return send(res, 204);
     }
     return send(res, 405, { error: "Method not allowed" });
+  }
+
+  if (p === "/api/feedback" && req.method === "GET") {
+    return send(res, 200, { ...feedbackCall(() => feedback.list(feedbackWho(uid))), demo: DEMO }, { "Cache-Control": "no-store" });
+  }
+  if (p === "/api/feedback" && req.method === "POST") {
+    const { body } = await readJson(req);
+    return send(res, 201, feedbackCall(() => feedback.post(feedbackWho(uid), body)));
+  }
+  m = /^\/api\/feedback\/([A-Za-z0-9_-]{1,32})$/.exec(p);
+  if (m && req.method === "DELETE") {
+    feedbackCall(() => feedback.remove(feedbackWho(uid), m[1]));
+    return send(res, 204);
   }
 
   if (p === "/api/photos" && req.method === "POST") {

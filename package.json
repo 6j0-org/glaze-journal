@@ -10,6 +10,7 @@
     "dev": "node --watch server.js",
     "demo": "DEMO=1 node server.js",
     "test": "node test/run.mjs",
+    "test:unit": "node test/run.mjs unit",
     "test:server": "node test/run.mjs server",
     "test:browser": "node test/run.mjs browser",
     "icons": "node tools/make-icons.mjs"

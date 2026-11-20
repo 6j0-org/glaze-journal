@@ -43,4 +43,18 @@ assert.equal((await a.api("GET", "/photos/" + ids[1], undefined, { raw: true }))
 await a.api("DELETE", "/api/logs/entry1");
 assert.equal((await a.api("GET", "/photos/" + ids[0], undefined, { raw: true })).status, 404, "deleting the entry deletes its photos");
 
+// Feedback: in the demo, each visitor sees only their own; the 2048-character limit; deleting your own.
+assert.equal((await fetch(BASE + "/api/feedback")).status, 401, "feedback needs a session");
+const f1 = await a.api("POST", "/api/feedback", { body: "Photo viewer please" });
+assert.equal(f1.mine, true);
+assert.equal(f1.user, undefined, "the author's ID isn't returned");
+let fl = await a.api("GET", "/api/feedback");
+assert.deepEqual([fl.items.map((i) => i.body), fl.maxLength, fl.isAdmin, fl.demo], [["Photo viewer please"], 2048, false, true]);
+assert.deepEqual((await b.api("GET", "/api/feedback")).items, [], "another demo visitor doesn't see it");
+await assert.rejects(b.api("DELETE", "/api/feedback/" + f1.id), { status: 404 }, "or delete it");
+await assert.rejects(a.api("POST", "/api/feedback", { body: "x".repeat(2049) }), { status: 400 });
+await assert.rejects(a.api("POST", "/api/feedback", { body: "" }), { status: 400 });
+await a.api("DELETE", "/api/feedback/" + f1.id);
+assert.deepEqual((await a.api("GET", "/api/feedback")).items, []);
+
 console.log("server api: ok");

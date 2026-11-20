@@ -2,6 +2,7 @@ import {
   loadKey, clearKey, encryptRecord, decryptRecord, encryptPhoto, decryptPhoto, startIdSignIn, finishIdSignIn, hasIdCallback,
   createDemoAccount,
 } from "/secure.js";
+import { mountFeedback } from "/feedback.js";
 
 (() => {
   const DEFAULTS = {
@@ -217,6 +218,7 @@ import {
 
   function forget() {
     state.glazes = []; state.logs = []; state.lists = clone(DEFAULTS);
+    feedbackPage = null;
     clearPhotos();
     const cleared = clearKey();
     document.querySelectorAll("dialog[open]").forEach((d) => d.close());
@@ -249,6 +251,7 @@ import {
   function showAuthUi() {
     $("nav.tabs").hidden = state.auth !== "in";
     $("#signOut").hidden = state.auth !== "in" && state.auth !== "locked";
+    $("#feedbackLink").hidden = state.auth !== "in";
     if (state.demo) { $("#signOut").textContent = "Start over"; $("#signOut").title = "Demo: replace this journal with a fresh demo one"; }
   }
 
@@ -270,11 +273,11 @@ import {
   }
 
   // ---------- routing ----------
-  const VIEWS = ["log", "glazes", "lists"];
+  const VIEWS = ["log", "glazes", "lists", "feedback"];
   function route() {
     const h = location.hash.replace("#", "");
     state.view = VIEWS.includes(h) ? h : "log";
-    document.querySelectorAll("nav.tabs a").forEach((a) => a.setAttribute("aria-current", a.dataset.view === state.view ? "page" : "false"));
+    document.querySelectorAll("nav.tabs a, #feedbackLink").forEach((a) => a.setAttribute("aria-current", a.dataset.view === state.view ? "page" : "false"));
     render();
   }
   window.addEventListener("hashchange", route);
@@ -284,6 +287,7 @@ import {
     const v = $("#view");
     if (state.auth === "out" || state.auth === "locked") { v.innerHTML = renderSignIn(); return; }
     if (!store || state.auth !== "in") { v.innerHTML = `<p class="loading">Opening the studio…</p>`; return; }
+    if (state.view === "feedback") { showFeedback(v); return; }
     const active = document.activeElement, focusId = v.contains(active) ? active.id : "";
     const caret = focusId && active.selectionStart != null ? [active.selectionStart, active.selectionEnd] : null;
     if (state.view === "log") v.innerHTML = renderLog();
@@ -291,6 +295,22 @@ import {
     else v.innerHTML = renderLists();
     const again = focusId && document.getElementById(focusId);
     if (again) { again.focus(); if (caret) try { again.setSelectionRange(...caret); } catch {} }
+  }
+
+  // The feedback page (public/feedback.js) is drawn once per account and kept, so the journal's regular refreshes
+  // don't redraw it, and a half-written post survives going to another tab and back.
+  let feedbackPage = null; // { el, page }
+  function showFeedback(v) {
+    if (feedbackPage && v.firstElementChild === feedbackPage.el) return;
+    if (!feedbackPage) {
+      const el = document.createElement("div");
+      const page = mountFeedback(el, {
+        buttonClass: "btn small", primaryClass: "btn primary",
+        ...(state.demo ? { intro: "Ideas, problems, or questions? In this demo only you can see what you post here. Please don't include anything personal." } : {}),
+      });
+      feedbackPage = { el, page };
+    } else feedbackPage.page.refresh();
+    v.replaceChildren(feedbackPage.el);
   }
 
   function usageCount(field, value) {

@@ -1,5 +1,6 @@
-// Runs the tests: node test/run.mjs [server|browser ...]
+// Runs the tests: node test/run.mjs [unit|server|browser ...]
 //
+// - unit: modules on their own, with no server (test/unit).
 // - server: the API in Node against a demo-mode server on a free port (test/server).
 // - browser: the real UI in headless Chromium against the same server (test/browser). Skipped when no Chrome or
 //   Chromium is found, unless TEST_BROWSER=1 (for CI), which makes a missing browser a failure.
@@ -14,7 +15,7 @@ import { join } from "node:path";
 import { findChrome } from "./lib.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-const SUITES = ["server", "browser"];
+const SUITES = ["unit", "server", "browser"];
 const asked = process.argv.slice(2);
 const bad = asked.filter((s) => !SUITES.includes(s));
 if (bad.length) { console.error(`Unknown suite: ${bad.join(", ")} (use ${SUITES.join(", ")})`); process.exit(2); }
@@ -67,8 +68,8 @@ try {
       else console.log("skip  browser: no Chrome or Chromium found (set CHROME_BIN to run these)");
       continue;
     }
-    if (!server) await startServer();
-    for (const f of files(suite)) results.push(await run(f, { TEST_BASE: base }));
+    if (suite !== "unit" && !server) await startServer();
+    for (const f of files(suite)) results.push(await run(f, suite === "unit" ? {} : { TEST_BASE: base }));
   }
 } finally {
   server?.kill(); // SIGTERM: the server deletes its temporary photo folder on the way out
