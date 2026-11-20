@@ -1,4 +1,4 @@
-// Verifies sign-in tokens from a 6j0.org identity server, using only node:crypto. (Same file as in 6j0-org-bored.)
+// Verifies sign-in tokens from a 6j0.org identity server, using only node:crypto.
 //
 // Tokens are compact JWTs signed with Ed25519 ("EdDSA"). The public keys come from the identity server's JWKS
 // (ID_JWKS_URL, default ID_ORIGIN + /.well-known/jwks.json), cached and re-fetched when an unknown kid shows up.

@@ -110,15 +110,15 @@ before building the image, and skips the build if they fail.
    `ID_ORIGIN/authorize?app=glaze-journal&nonce=…&epk=…`.
 2. The identity server signs the person in and sends the browser back to `/` with a signed token (an Ed25519 JWT)
    in the URL fragment, which never reaches a server.
-3. The page checks the nonce and posts the token to `/api/id/login`. `idtoken.js` (the same file as in Bored?)
-   verifies the signature against the identity server's JWKS, plus `iss`, `aud`, `exp`, `nonce`, and one-time use
+3. The page checks the nonce and posts the token to `/api/id/login`. `idtoken.js` verifies
+   the signature against the identity server's JWKS, plus `iss`, `aud`, `exp`, `nonce`, and one-time use
    (`jti`). The server then finds or creates the account for the token's `sub` and sets a session cookie
    (`HttpOnly`, `SameSite=Lax`, 30 days; the database stores only its SHA-256).
 4. The page decrypts the app key that came with the token (below) and unlocks the journal.
 
 ### Encryption
 
-Same scheme as Bored? with a 6j0.org identity; the code is in `public/secure.js`.
+The code is in `public/secure.js`.
 
 - Alongside the token, the identity server hands the page Glaze Journal's own 32-byte **app key**, encrypted to
   the one-time ECDH key the page made, in the URL fragment. It's derived from the identity's root secret (which
