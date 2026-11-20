@@ -81,7 +81,8 @@ npm run test:browser   # the real UI in headless Chromium: several photos per fi
 The runner (`test/run.mjs`) starts its own demo-mode server on a free port, so nothing touches `data/`. There are no
 dependencies: the browser tests drive Chrome or Chromium over the DevTools protocol with Node's built-in WebSocket.
 Set `CHROME_BIN` if it isn't found; without one they're skipped, unless `TEST_BROWSER=1`, which makes that a
-failure. `TEST_VERBOSE=1` prints every test's output, not just the failures'.
+failure. `TEST_VERBOSE=1` prints every test's output, not just the failures'. CI runs them (with a browser required)
+before building the image, and skips the build if they fail.
 
 ### Sign-in
 
@@ -142,7 +143,7 @@ ID_ORIGIN=http://localhost:4000 ORIGIN=http://127.0.0.1:3000 npm start   # open 
 
 ## Docker
 
-CI builds multi-arch (amd64, arm64) images: `.gitlab-ci.yml` publishes to this project's GitLab Container Registry
+CI runs the [tests](#tests), then builds multi-arch (amd64, arm64) images: `.gitlab-ci.yml` publishes to this project's GitLab Container Registry
 (`:latest`, `:<short sha>`, and a sortable `:dev-<short sha>-<unix time>` for Flux image automation on the default
 branch, `:<tag>` for tags), and `.github/workflows/image.yml` publishes to `ghcr.io`. Merge and pull requests only
 build.

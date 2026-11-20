@@ -1,5 +1,6 @@
-# Builds the server image and publishes it to the GitHub Container Registry
-# (ghcr.io/<owner>/<repo>). Pull requests only build; pushes to main publish
+# Runs the tests, then builds the server image and publishes it to the GitHub
+# Container Registry (ghcr.io/<owner>/<repo>). The image is only built when the
+# tests pass. Pull requests only build; pushes to main publish
 # :latest and :sha-<short>, and v* tags publish the version tags.
 name: Image
 
@@ -19,7 +20,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The API and browser tests (test/run.mjs) against a demo-mode server. The
+  # runner image has Google Chrome; TEST_BROWSER=1 makes a missing browser a
+  # failure instead of a skip.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - run: npm test
+        env:
+          TEST_BROWSER: "1"
+
   image:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

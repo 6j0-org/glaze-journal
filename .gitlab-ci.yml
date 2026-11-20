@@ -1,9 +1,10 @@
-# Builds the server image and publishes it to this project's GitLab Container
-# Registry ($CI_REGISTRY_IMAGE). Merge requests only build; the default branch
+# Runs the tests, then builds the server image and publishes it to this project's
+# GitLab Container Registry ($CI_REGISTRY_IMAGE). The image is only built when the
+# tests pass. Merge requests only build; the default branch
 # publishes :latest, :<short sha> and :dev-<short sha>-<unix time> (sortable, for
 # Flux image automation), and tags publish :<tag>.
 
-stages: [build]
+stages: [test, build]
 
 workflow:
   rules:
@@ -12,6 +13,21 @@ workflow:
       when: never
     - if: $CI_COMMIT_BRANCH
     - if: $CI_COMMIT_TAG
+
+# The API and browser tests (test/run.mjs) against a demo-mode server, with
+# Chromium for the browser tests. TEST_BROWSER=1 makes a missing browser a
+# failure instead of a skip.
+test:
+  stage: test
+  image: node:26
+  variables:
+    TEST_BROWSER: "1"
+    CHROME_BIN: /usr/bin/chromium
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends chromium fonts-dejavu-core >/dev/null
+  script:
+    - npm test
 
 build-image:
   stage: build
