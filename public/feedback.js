@@ -38,10 +38,12 @@ export function mountFeedback(el, {
   const showCount = () => { count.textContent = `${box.value.length} / ${box.maxLength}`; };
   showCount();
 
+  // Changes are always sent as JSON (an empty object if there's nothing to say), since some apps only accept JSON for
+  // anything but GET, as a guard against cross-site form posts.
   async function call(method, url, body) {
     let r;
     try {
-      r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+      r = await fetch(url, method === "GET" ? { method } : { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
     } catch { throw new Error("Can't reach the server. Check your connection."); }
     const data = r.status === 204 ? null : await r.json().catch(() => null);
     if (!r.ok) throw new Error(data?.error || r.statusText);
