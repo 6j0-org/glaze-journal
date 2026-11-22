@@ -43,7 +43,8 @@ assert.equal((await a.api("GET", "/photos/" + ids[1], undefined, { raw: true }))
 await a.api("DELETE", "/api/logs/entry1");
 assert.equal((await a.api("GET", "/photos/" + ids[0], undefined, { raw: true })).status, 404, "deleting the entry deletes its photos");
 
-// Feedback: in the demo, each visitor sees only their own; the 2048-character limit; deleting your own.
+// Feedback: in the demo, each visitor sees only their own; the 2048-character limit; threads (replying; only the
+// developer closes them); deleting your own.
 assert.equal((await fetch(BASE + "/api/feedback")).status, 401, "feedback needs a session");
 const f1 = await a.api("POST", "/api/feedback", { body: "Photo viewer please" });
 assert.equal(f1.mine, true);
@@ -54,6 +55,12 @@ assert.deepEqual((await b.api("GET", "/api/feedback")).items, [], "another demo 
 await assert.rejects(b.api("DELETE", "/api/feedback/" + f1.id), { status: 404 }, "or delete it");
 await assert.rejects(a.api("POST", "/api/feedback", { body: "x".repeat(2049) }), { status: 400 });
 await assert.rejects(a.api("POST", "/api/feedback", { body: "" }), { status: 400 });
+let th = await a.api("POST", `/api/feedback/${f1.id}/replies`, { body: "And zoom" });
+assert.deepEqual([th.messages.map((m) => [m.body, m.mine, m.op]), th.canReply, th.canClose, th.status, th.author], [[["And zoom", true, true]], true, false, "open", undefined]);
+assert.equal((await a.api("GET", "/api/feedback/" + f1.id)).messages.length, 1);
+await assert.rejects(a.api("POST", `/api/feedback/${f1.id}/status`, { status: "done" }), { status: 403 });
+await assert.rejects(b.api("GET", "/api/feedback/" + f1.id), { status: 404 }, "another demo visitor can't open it");
+await assert.rejects(b.api("POST", `/api/feedback/${f1.id}/replies`, { body: "hi" }), { status: 404 });
 await a.api("DELETE", "/api/feedback/" + f1.id);
 assert.deepEqual((await a.api("GET", "/api/feedback")).items, []);
 

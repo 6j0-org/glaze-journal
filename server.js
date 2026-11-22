@@ -45,7 +45,8 @@ const ID = DEMO ? null : (() => {
 })();
 const SECURE_COOKIE = String(process.env.ORIGIN || "").startsWith("https:") ? "; Secure" : "";
 const OWNER_SUB = process.env.ID_OWNER_SUB || "";
-// ADMIN_SUB: the 6j0.org identity that can delete anyone's feedback, and whose own feedback is labeled.
+// ADMIN_SUB: the 6j0.org identity of the developer, who can close and delete anyone's feedback, and whose own posts
+// and replies are labeled.
 const ADMIN_SUB = process.env.ADMIN_SUB || "";
 const UNCLAIMED = 0; // user_id of data from before sign-in existed
 const MAX_DEMO_VISITORS = 5000;
@@ -180,7 +181,8 @@ const photoRefs = (d) => (Array.isArray(d?.photos) ? d.photos : [d?.pre?.id, d?.
 const forClient = (id, d) => (typeof d.enc === "string" ? { id, enc: d.enc } : { id, legacy: d });
 
 // ---------- feedback ----------
-// Signed-in people read everyone's feedback and post their own (feedback.js), kept in DATA_DIR/feedback.jsonl. It's
+// Signed-in people read everyone's feedback and post their own (feedback.js), kept in DATA_DIR/feedback.jsonl. Each
+// post is a chat thread anyone who can see it can reply to, which the developer closes as done or won't do. It's
 // shared, so it isn't encrypted. Posts are filed under the account's random public guid, never shown to anyone. In the
 // demo, each visitor sees only their own, so the demo can't turn into an anonymous message board.
 const feedback = createFeedback({ file: path.join(DATA_DIR, "feedback.jsonl"), scope: DEMO ? "own" : "all" });
@@ -452,9 +454,18 @@ async function handle(req, res) {
     return send(res, 201, feedbackCall(() => feedback.post(feedbackWho(uid), body)));
   }
   m = /^\/api\/feedback\/([A-Za-z0-9_-]{1,32})$/.exec(p);
+  if (m && req.method === "GET") {
+    return send(res, 200, feedbackCall(() => feedback.thread(feedbackWho(uid), m[1])), { "Cache-Control": "no-store" });
+  }
   if (m && req.method === "DELETE") {
     feedbackCall(() => feedback.remove(feedbackWho(uid), m[1]));
     return send(res, 204);
+  }
+  m = /^\/api\/feedback\/([A-Za-z0-9_-]{1,32})\/(replies|status)$/.exec(p);
+  if (m && req.method === "POST") {
+    const body = await readJson(req), who = feedbackWho(uid);
+    if (m[2] === "replies") return send(res, 201, feedbackCall(() => feedback.reply(who, m[1], body.body)));
+    return send(res, 200, feedbackCall(() => feedback.setStatus(who, m[1], body.status)));
   }
 
   if (p === "/api/photos" && req.method === "POST") {

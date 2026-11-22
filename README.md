@@ -52,26 +52,31 @@ Requires Node 24 or newer. To try it without an identity server, see [Demo mode]
 | `ID_APP`       | `glaze-journal` | This app's name in the identity server's `APPS` |
 | `ID_JWKS_URL`  | `ID_ORIGIN/.well-known/jwks.json` | Where to fetch the identity server's public keys (e.g. an in-cluster Service URL) |
 | `ID_OWNER_SUB` | unset    | The identity that gets journal data from before sign-in existed. Unset: the first account to sign in gets it. |
-| `ADMIN_SUB`    | unset    | The 6j0.org identity (its `sub`) that can delete anyone's [feedback](#feedback), and whose feedback is labeled "Developer". |
+| `ADMIN_SUB`    | unset    | The 6j0.org identity (its `sub`) that can close and delete anyone's [feedback](#feedback), and whose posts and replies are labeled "Developer". |
 | `ORIGIN`       | unset    | This app's public origin, e.g. `https://glaze.6j0.org`. `https:` turns on `Secure` cookies. |
 
 ### Feedback
 
 The Feedback button in the header opens a page where signed-in people read everyone's feedback and post their own:
-plain text, up to 2048 characters. Posts show no author; the server files each one under the account's random
-public ID so people can delete their own. Each account can post 5 times a day, and everyone together 500 times a
-day. Set `ADMIN_SUB` to your identity's `sub` to delete anyone's posts and have yours labeled "Developer" (so you
-can answer). In the demo, each visitor sees only their own posts.
+plain text, up to 2048 characters. Each post is a chat: tapping it opens its thread, where anyone can reply. Posts
+and replies show no author (the post's author is "Tester" in its thread); the server files each one under the
+account's random public ID so people can delete their own. Each account can post or reply 100 times a day, and
+everyone together 500 times a day. Set `ADMIN_SUB` to your identity's `sub` to close threads as Done or Won't do (or
+reopen them), delete anyone's posts, and have yours labeled "Developer". In the demo, each visitor sees only their
+own posts.
 
 Feedback is shared, so unlike the journal it isn't encrypted, and the page says so. It's kept in
-`DATA_DIR/feedback.jsonl`, one JSON object per line, appended to and never edited in place: posts, and deletions as
-`{"delete": id}` lines. Read it with `tail -f`, `grep`, or `jq`. The server loads it at startup and, if anything was
-deleted, rewrites it without the deleted posts, so deleted text is gone from the disk after the next restart.
+`DATA_DIR/feedback.jsonl`, one JSON object per line, appended to and never edited in place: posts, replies
+(`{"reply": post id, …}`), status changes (`{"status": post id, "value": "done"}`), and deletions (`{"delete": id}`).
+Read it with `tail -f`, `grep`, or `jq`. The server loads it at startup and, if anything was deleted, rewrites it
+without the deleted posts and their replies, so deleted text is gone from the disk after the next restart.
 
 It's built to be copied into other apps: `feedback.js` (the server side: no dependencies, and nothing about this
 app's accounts, routes, or database) and `public/feedback.js` (draws the page; style it with the `fb-*` classes).
-The app wires up three routes and says who's asking (see the comments at the top of each file and the
-`/api/feedback` routes in `server.js`). `test/unit/feedback.mjs` tests the server side on its own.
+The app wires up its routes and says who's asking (see the comments at the top of each file and the
+`/api/feedback` routes in `server.js`). An app that has avatars or names can show them: pass `authorKey` on the
+server and `author` to the page (this app doesn't, so feedback stays anonymous). `test/unit/feedback.mjs` tests the
+server side on its own.
 
 ### Demo mode
 
@@ -207,8 +212,11 @@ data are refused.
 | GET    | `/api/catalog/lines-by-brand` | `{brand: [line names]}`                     |
 | POST   | `/api/catalog/item`  | `{item}` → glaze fields plus `{productImage, imageNote}` (the image is cached on the server) |
 | POST   | `/api/import`        | `{url}` → `{name, code, brand, description, sourceUrl, productImage, imageNote}` |
-| GET    | `/api/feedback`      | `{items: [{id, body, created, admin, mine, canDelete}], maxLength, isAdmin, demo}`, newest first |
+| GET    | `/api/feedback`      | `{items: [{id, body, created, updated, admin, mine, canDelete, status, replies}], maxLength, isAdmin, demo}`, most recently active first |
 | POST   | `/api/feedback`      | `{body}` → the new item (400 if empty or over 2048 characters, 429 over the daily limits) |
+| GET    | `/api/feedback/:id`  | the item plus `{messages: [{id, body, created, admin, mine, op}], canReply, canClose}` |
+| POST   | `/api/feedback/:id/replies` | `{body}` → the thread                         |
+| POST   | `/api/feedback/:id/status`  | `{status}` (`open`, `done`, or `wontdo`) → the thread; `ADMIN_SUB` only |
 | DELETE | `/api/feedback/:id`  | your own, or anyone's for `ADMIN_SUB`                |
 | POST   | `/api/photos`        | encrypted photo bytes as `application/octet-stream` → `{id}` |
 | GET    | `/photos/:id`        | the encrypted photo                                  |

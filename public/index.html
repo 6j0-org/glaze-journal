@@ -261,6 +261,28 @@ dialog.lightbox::backdrop { background: rgb(0 0 0 / .6); }
 .fb-delete.fb-armed { background: var(--danger); border-color: var(--danger); color: var(--surface); }
 .fb-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .fb-empty { color: var(--muted); margin: 0; }
+.fb-item[data-open] { cursor: pointer; }
+.fb-item[data-open]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fb-item .fb-text { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.fb-state { font-weight: 600; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; background: var(--sunk); color: var(--ink); }
+.fb-state-done { background: var(--accent); color: var(--on-accent); }
+.fb-state-wontdo { background: var(--line); color: var(--muted); }
+.fb-replies::before { content: "· "; }
+.fb-avatar { display: inline-flex; line-height: 0; }
+.fb-name, .fb-author { color: var(--ink); font-weight: 600; }
+.fb-hidden { color: var(--muted); font-style: italic; }
+.fb-thread { display: grid; gap: 12px; max-width: 760px; }
+.fb-thread-head { display: flex; align-items: center; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.fb-back { background: none; border: 0; color: var(--ink); font-size: 1.4rem; padding: 4px 8px 4px 0; cursor: pointer; }
+.fb-thread-actions { margin-left: auto; display: flex; gap: 6px; }
+.fb-msgs { display: flex; flex-direction: column; gap: 8px; }
+.fb-msg { max-width: 85%; align-self: flex-start; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 8px 12px; display: grid; gap: 4px; }
+.fb-msg-admin { border-color: var(--accent); }
+.fb-msg-mine { align-self: flex-end; background: var(--accent-soft); border-color: transparent; }
+.fb-sys { align-self: center; text-align: center; color: var(--muted); font-size: .85rem; margin: 0; }
+.fb-reply { display: grid; gap: 6px; }
+.fb-reply-body { width: 100%; resize: vertical; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 8px 10px; }
+.fb-reply-status { margin-right: auto; color: var(--muted); font-size: .88rem; }
 .signin { max-width: 520px; margin: 40px auto 0; background: var(--surface); border-style: solid; }
 .signin .err { color: var(--danger); }
 @media (max-width: 520px) { .view-head h2 { font-size: 1.4rem; } .dl { grid-template-columns: 1fr; } .dl dt { margin-top: 6px; } }

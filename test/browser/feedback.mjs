@@ -11,7 +11,7 @@ assert.ok(await B.ev(`!document.getElementById('feedbackLink').hidden`), "the Fe
 await B.click("#feedbackLink");
 await B.until(`location.hash === '#feedback' && document.querySelector('.fb-empty')?.textContent.includes('No feedback yet')`);
 assert.equal(await B.ev(`document.getElementById('feedbackLink').getAttribute('aria-current')`), "page");
-assert.match(await B.ev(`document.querySelector('.fb-intro').textContent`), /only you can see/, "the demo says posts are private to you");
+assert.match(await B.ev(`document.querySelector('.fb-intro').textContent`), /only you and the developer can see/, "the demo says posts are private to you");
 assert.equal(await B.ev(`document.getElementById('fbBody').maxLength`), 2048);
 
 // An empty post is refused in the page.
@@ -48,11 +48,28 @@ await B.until(`document.querySelectorAll('.fb-item').length === 2`);
 assert.ok((await items())[0].startsWith("<b>bold?</b>"), "shown as text, not HTML");
 assert.equal(await B.ev(`document.querySelectorAll('.fb-text b').length`), 0);
 
-// Delete takes two clicks.
-await B.click(".fb-item .fb-delete");
-assert.equal(await B.ev(`document.querySelector('.fb-item .fb-delete').textContent`), "Confirm delete");
+// A post opens as a chat, where anyone can reply; only the developer can close it. Back in the list, it shows the
+// reply count, and the most recently active post comes first.
+await B.ev(`document.querySelectorAll('.fb-item')[1].click()`);
+await B.until(`document.querySelector('.fb-thread:not([hidden]) .fb-msg')`);
+assert.equal(await B.ev(`document.querySelector('.fb-thread .fb-state').textContent`), "Open");
+assert.equal(await B.ev(`document.querySelectorAll('[data-set-status]').length`), 0, "only the developer can close it");
+assert.equal(await B.ev(`document.querySelector('.fb-msg .fb-author').textContent`), "Tester");
+assert.equal(await B.ev(`document.querySelectorAll('.fb-avatar').length`), 0, "posts here are anonymous: no avatars");
+await B.click("#fbReply");
+await B.send("Input.insertText", { text: "Or double-tap." });
+await B.click(".fb-reply-send");
+await B.until(`document.querySelectorAll('.fb-msg').length === 2`);
+await B.click(".fb-back");
+await B.until(`document.querySelector('.fb-item .fb-replies')`);
+assert.equal(await B.ev(`document.querySelector('.fb-item .fb-replies').textContent`), "1 reply");
+assert.ok((await items())[0].startsWith("Could the viewer zoom?"), "the most recently active comes first");
+
+// Delete takes two clicks (the bold one, now second).
+await B.click(".fb-item:nth-child(2) .fb-delete");
+assert.equal(await B.ev(`document.querySelector('.fb-item:nth-child(2) .fb-delete').textContent`), "Confirm delete");
 assert.equal(await B.ev(`document.querySelectorAll('.fb-item').length`), 2, "nothing's deleted yet");
-await B.click(".fb-item .fb-delete");
+await B.click(".fb-item:nth-child(2) .fb-delete");
 await B.until(`document.querySelectorAll('.fb-item').length === 1`);
 assert.deepEqual(await items(), ["Could the viewer zoom?\nPinch to zoom would be great."]);
 

@@ -306,7 +306,7 @@ import { mountFeedback } from "/feedback.js";
       const el = document.createElement("div");
       const page = mountFeedback(el, {
         buttonClass: "btn small", primaryClass: "btn primary",
-        ...(state.demo ? { intro: "Ideas, problems, or questions? In this demo only you can see what you post here. Please don't include anything personal." } : {}),
+        ...(state.demo ? { intro: "Ideas, problems, or questions? In this demo only you and the developer can see what you post here. Tap a post to open its chat. Please don't include anything personal." } : {}),
       });
       feedbackPage = { el, page };
     } else feedbackPage.page.refresh();
