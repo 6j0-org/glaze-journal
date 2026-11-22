@@ -6,7 +6,9 @@
 // People can edit their own post and replies, from the post's chat.
 // Each post opens as a chat that everyone who can see it can reply to; the developers (the admins) close it as done
 // or won't do. App-agnostic, so it can be copied into other apps: style it with the fb-* classes, and pass
-// buttonClass and primaryClass to reuse the app's own button styles.
+// buttonClass (buttons that don't change anything: Edit, Cancel), primaryClass (Post, Send, Save), and actionClass
+// (small buttons that change something: Delete, Done, Won't do, Reopen; primaryClass if left out) to reuse the app's
+// own button styles.
 //
 // Posts are anonymous unless the server sends each post's and reply's "author" (see authorKey in feedback.js) and the
 // app passes author(key): it returns { icon, name, hidden } or null, where icon is HTML the app trusts (an avatar),
@@ -34,6 +36,7 @@ export function mountFeedback(el, {
   author = null,          // (key) → { icon, name, hidden } or null, for posts with an "author"; see above
   buttonClass = "",
   primaryClass = "",
+  actionClass = null,     // defaults to primaryClass
   maxLength = 2048,
   pollMs = 10000,       // how often an open thread checks for new replies
 } = {}) {
@@ -89,7 +92,7 @@ export function mountFeedback(el, {
       ? items.map((it) => `<article class="fb-item${it.mine ? " fb-mine" : ""}" data-open="${esc(it.id)}" role="button" tabindex="0" aria-label="Open this feedback's chat">
           <div class="fb-meta">${statusTag(it.status)}${byline(it, false)}${time(it.created)}${editedTag(it)}
             ${it.replies ? `<span class="fb-replies">${it.replies === 1 ? "1 reply" : `${it.replies} replies`}</span>` : ""}
-            ${it.canDelete ? `<button type="button" class="fb-delete ${esc(buttonClass)}" data-delete="${esc(it.id)}">Delete</button>` : ""}</div>
+            ${it.canDelete ? `<button type="button" class="fb-delete ${esc(actionClass ?? primaryClass)}" data-delete="${esc(it.id)}">Delete</button>` : ""}</div>
           ${text(it)}</article>`).join("")
       : `<p class="fb-empty">No feedback yet. Be the first.</p>`;
   }
@@ -114,7 +117,7 @@ export function mountFeedback(el, {
     editing = false;
     const draft = threadEl.querySelector(".fb-reply-body")?.value || "";
     shown = t;
-    const closeBtn = (s, label) => `<button type="button" class="${esc(buttonClass)}" data-set-status="${s}">${esc(label)}</button>`;
+    const closeBtn = (s, label) => `<button type="button" class="${esc(actionClass ?? primaryClass)}" data-set-status="${s}">${esc(label)}</button>`;
     threadEl.innerHTML = `
       <div class="fb-thread-head">
         <button type="button" class="fb-back" aria-label="Back to all feedback">←</button>
