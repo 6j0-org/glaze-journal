@@ -8,10 +8,12 @@
 //   {"id":"…","user":"…","created":1763600000000,"body":"…"}          a post ("admin":true if an admin wrote it)
 //   {"reply":"<post id>","id":"…","user":"…","created":…,"body":"…"}   a reply in a post's thread (likewise "admin")
 //   {"status":"<post id>","value":"done","by":"…","at":…}              closed as "done" or "wontdo", or reopened ("open")
+//   {"edit":"<post or reply id>","body":"…","by":"…","at":…}           a post or reply edited by its author
 //   {"delete":"<post id>","by":"…","at":1763600500000}                 a post deleted, with its thread
 // The whole file is read at startup and kept in memory. At startup the file is also compacted (rewritten without
 // deleted posts and their replies, then renamed into place) when anything was deleted, so deleted text doesn't stay
-// on disk past the next restart. Compacted posts carry their status as "status" and "closed" fields. Only one process
+// on disk past the next restart. Compacted posts carry their status as "status" and "closed" fields, and edited posts
+// and replies their newest text, with "edited" saying when. Only one process
 // may write to the file.
 //
 // Who's asking is passed to each call as { user, admin }: user is any stable, opaque ID for the account (never shown
@@ -23,13 +25,15 @@
 // Usage:
 //   const feedback = createFeedback({ file: "data/feedback.jsonl" });
 //   feedback.list(who)              → { items: [item], maxLength, isAdmin }, the most recently active first, where
-//                                     item is { id, body, created, updated, admin, mine, canDelete, status, replies }
+//                                     item is { id, body, created, edited, updated, admin, mine, canDelete, status,
+//                                     replies } (edited: when it was last edited, or 0)
 //                                     (plus author, with authorKey)
 //   feedback.post(who, body)        → the new item
-//   feedback.thread(who, id)        → { ...item, messages: [{ id, body, created, admin, mine, op }], canReply, canClose }
+//   feedback.thread(who, id)        → { ...item, messages: [{ id, body, created, edited, admin, mine, op }], canReply, canClose }
 //                                     (op: written by the post's author; plus author, with authorKey)
 //   feedback.reply(who, id, body)   → the thread
 //   feedback.setStatus(who, id, s)  → the thread ("open", "done", or "wontdo"; admins only)
+//   feedback.edit(who, id, body, replyId)  → the thread, with the post (or that reply) changed; its author only
 //   feedback.remove(who, id)
 //   feedback.doneCount(user)        → how many of this account's posts admins closed as done
 //   feedback.authorOf(id)           → the post's author's user ID (for the app's own use, e.g. notifications)
@@ -48,8 +52,8 @@ export const STATUSES = ["open", "done", "wontdo"];
 export function createFeedback({
   file,
   maxLength = 2048,     // characters per post or reply (UTF-16 code units, as the browser's maxlength counts them)
-  perUserPerDay = 100,  // posts and replies per account in any 24 hours, deleted ones included
-  perDay = 500,         // posts and replies from everyone together in any 24 hours, so many accounts can't fill the disk
+  perUserPerDay = 100,  // posts, replies, and edits per account in any 24 hours, deleted ones included
+  perDay = 500,         // posts, replies, and edits from everyone together in any 24 hours, so many accounts can't fill the disk
   listLimit = 200,      // most recently active posts returned by list()
   scope = "all",        // "all": everyone sees every post; "own": people see only their own (admins see all)
   authorKey = null,     // (user ID) → what to show of the author, as "author"; leave it out to keep posts anonymous
@@ -60,8 +64,9 @@ export function createFeedback({
   // id → post, in the order posted. In memory, each post also has status, closed (when it was last closed or
   // reopened, or 0), updated (its last reply or status change), and replies.
   const posts = new Map();
+  const replyOf = new Map(); // reply id → its post
   const recent = [];       // { user, created } of posts and replies in the last day, deleted ones included, for the limits
-  const remember = (r) => { if (now() - r.created < DAY) recent.push({ user: r.user, created: r.created }); };
+  const remember = (user, created) => { if (now() - created < DAY) recent.push({ user, created }); };
 
   // Load, and compact if anything was deleted.
   let deletions = 0, skipped = 0;
@@ -71,18 +76,24 @@ export function createFeedback({
       let r;
       try { r = JSON.parse(line); } catch { skipped++; continue; } // e.g. a line cut short by a crash
       if (typeof r.delete === "string") { posts.delete(r.delete); deletions++; }
+      else if (typeof r.edit === "string" && typeof r.body === "string") {
+        const p = posts.get(r.edit), parent = replyOf.get(r.edit), x = p || parent?.replies.find((y) => y.id === r.edit);
+        if (x && (p || posts.has(parent.id))) { x.body = r.body; x.edited = r.at; }
+        deletions++; // folded into the post or reply when compacted
+        remember(r.by, r.at);
+      }
       else if (typeof r.status === "string" && STATUSES.includes(r.value)) {
         const p = posts.get(r.status);
         if (p) { p.status = r.value; p.closed = r.at; p.updated = Math.max(p.updated, r.at); }
       } else if (typeof r.reply === "string" && typeof r.id === "string" && typeof r.body === "string") {
         const p = posts.get(r.reply);
-        if (p) { const { reply, ...rest } = r; p.replies.push(rest); p.updated = Math.max(p.updated, r.created); }
+        if (p) { const { reply, ...rest } = r; p.replies.push(rest); replyOf.set(r.id, p); p.updated = Math.max(p.updated, r.created); }
         else deletions++; // its post was deleted, so leave it out of the compacted file
-        remember(r);
+        remember(r.user, r.created);
       } else if (typeof r.id === "string" && typeof r.body === "string") {
         const status = STATUSES.includes(r.status) ? r.status : "open", closed = r.closed || 0;
         posts.set(r.id, { ...r, status, closed, updated: Math.max(r.created, closed), replies: [] });
-        remember(r);
+        remember(r.user, r.created);
       } else skipped++;
     }
     recent.sort((a, b) => a.created - b.created);
@@ -109,14 +120,14 @@ export function createFeedback({
   const visible = (p, who) => who.admin || scope === "all" || p.user === who.user;
   const author = (user) => (authorKey ? { author: authorKey(user) ?? null } : {});
   const view = (p, who) => ({
-    id: p.id, body: p.body, created: p.created, updated: p.updated, admin: Boolean(p.admin),
+    id: p.id, body: p.body, created: p.created, edited: p.edited || 0, updated: p.updated, admin: Boolean(p.admin),
     mine: p.user === who.user, canDelete: Boolean(who.admin) || p.user === who.user,
     status: p.status, replies: p.replies.length, ...author(p.user),
   });
   const threadView = (p, who) => ({
     ...view(p, who),
     messages: p.replies.map((r) => ({
-      id: r.id, body: r.body, created: r.created, admin: Boolean(r.admin), mine: r.user === who.user, op: r.user === p.user, ...author(r.user),
+      id: r.id, body: r.body, created: r.created, edited: r.edited || 0, admin: Boolean(r.admin), mine: r.user === who.user, op: r.user === p.user, ...author(r.user),
     })),
     canReply: true, // everyone who can see a thread can reply
     canClose: Boolean(who.admin),
@@ -176,6 +187,7 @@ export function createFeedback({
       const r = { id: newId(), user: who.user, created: t, body: text, ...(who.admin ? { admin: true } : {}) };
       append({ reply: p.id, ...r });
       p.replies.push(r);
+      replyOf.set(r.id, p);
       p.updated = t;
       recent.push({ user: r.user, created: t });
       return threadView(p, who);
@@ -190,6 +202,20 @@ export function createFeedback({
         append({ status: p.id, value, by: who.user, at: t });
         p.status = value; p.closed = t; p.updated = t;
       }
+      return threadView(p, who);
+    },
+    edit(who, id, body, replyId = null) {
+      check(who);
+      const p = find(who, id);
+      const x = replyId == null ? p : p.replies.find((r) => r.id === replyId);
+      if (!x) throw new FeedbackError(404, "That reply wasn't found.");
+      if (x.user !== who.user) throw new FeedbackError(403, "You can only edit what you wrote.");
+      const text = clean(body), t = now();
+      if (text === x.body) return threadView(p, who);
+      limit(who, t);
+      append({ edit: x.id, body: text, by: who.user, at: t });
+      x.body = text; x.edited = t;
+      recent.push({ user: who.user, created: t });
       return threadView(p, who);
     },
     remove(who, id) {

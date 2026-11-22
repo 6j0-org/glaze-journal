@@ -60,16 +60,17 @@ Requires Node 24 or newer. To try it without an identity server, see [Demo mode]
 The Feedback button in the header opens a page where signed-in people read everyone's feedback and post their own:
 plain text, up to 2048 characters. Each post is a chat: tapping it opens its thread, where anyone can reply. Posts
 and replies show no author (the post's author is "Tester" in its thread); the server files each one under the
-account's random public ID so people can delete their own. Each account can post or reply 100 times a day, and
-everyone together 500 times a day. Set `ADMIN_SUB` to your identity's `sub` to close threads as Done or Won't do (or
+account's random public ID so people can edit and delete their own. Each account can post, reply, or edit 100 times
+a day, and everyone together 500 times a day. Set `ADMIN_SUB` to your identity's `sub` to close threads as Done or Won't do (or
 reopen them), delete anyone's posts, and have yours labeled "Developer". In the demo, each visitor sees only their
 own posts.
 
 Feedback is shared, so unlike the journal it isn't encrypted, and the page says so. It's kept in
 `DATA_DIR/feedback.jsonl`, one JSON object per line, appended to and never edited in place: posts, replies
-(`{"reply": post id, …}`), status changes (`{"status": post id, "value": "done"}`), and deletions (`{"delete": id}`).
-Read it with `tail -f`, `grep`, or `jq`. The server loads it at startup and, if anything was deleted, rewrites it
-without the deleted posts and their replies, so deleted text is gone from the disk after the next restart.
+(`{"reply": post id, …}`), status changes (`{"status": post id, "value": "done"}`), edits (`{"edit": post or reply
+id, "body": …}`), and deletions (`{"delete": id}`). Read it with `tail -f`, `grep`, or `jq`. The server loads it at
+startup and, if anything was deleted or edited, rewrites it without the deleted posts and their replies and with
+edits folded in, so deleted and replaced text is gone from the disk after the next restart.
 
 It's built to be copied into other apps: `feedback.js` (the server side: no dependencies, and nothing about this
 app's accounts, routes, or database) and `public/feedback.js` (draws the page; style it with the `fb-*` classes).
@@ -212,9 +213,11 @@ data are refused.
 | GET    | `/api/catalog/lines-by-brand` | `{brand: [line names]}`                     |
 | POST   | `/api/catalog/item`  | `{item}` → glaze fields plus `{productImage, imageNote}` (the image is cached on the server) |
 | POST   | `/api/import`        | `{url}` → `{name, code, brand, description, sourceUrl, productImage, imageNote}` |
-| GET    | `/api/feedback`      | `{items: [{id, body, created, updated, admin, mine, canDelete, status, replies}], maxLength, isAdmin, demo}`, most recently active first |
+| GET    | `/api/feedback`      | `{items: [{id, body, created, edited, updated, admin, mine, canDelete, status, replies}], maxLength, isAdmin, demo}`, most recently active first |
 | POST   | `/api/feedback`      | `{body}` → the new item (400 if empty or over 2048 characters, 429 over the daily limits) |
-| GET    | `/api/feedback/:id`  | the item plus `{messages: [{id, body, created, admin, mine, op}], canReply, canClose}` |
+| GET    | `/api/feedback/:id`  | the item plus `{messages: [{id, body, created, edited, admin, mine, op}], canReply, canClose}` |
+| PUT    | `/api/feedback/:id`  | `{body}` → the thread, with your post edited         |
+| PUT    | `/api/feedback/:id/replies/:replyId` | `{body}` → the thread, with your reply edited |
 | POST   | `/api/feedback/:id/replies` | `{body}` → the thread                         |
 | POST   | `/api/feedback/:id/status`  | `{status}` (`open`, `done`, or `wontdo`) → the thread; `ADMIN_SUB` only |
 | DELETE | `/api/feedback/:id`  | your own, or anyone's for `ADMIN_SUB`                |

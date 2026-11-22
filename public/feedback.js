@@ -2,6 +2,8 @@
 //   GET <endpoint> → { items, maxLength, isAdmin }        POST <endpoint> { body } → item
 //   GET <endpoint>/:id → thread                           DELETE <endpoint>/:id
 //   POST <endpoint>/:id/replies { body } → thread         POST <endpoint>/:id/status { status } → thread
+//   PUT <endpoint>/:id { body } → thread                  PUT <endpoint>/:id/replies/:replyId { body } → thread
+// People can edit their own post and replies, from the post's chat.
 // Each post opens as a chat that everyone who can see it can reply to; the developers (the admins) close it as done
 // or won't do. App-agnostic, so it can be copied into other apps: style it with the fb-* classes, and pass
 // buttonClass and primaryClass to reuse the app's own button styles.
@@ -12,6 +14,7 @@
 //
 //   const page = mountFeedback(document.getElementById("view"), { buttonClass: "btn small", primaryClass: "btn primary" });
 //   page.refresh();   // reload what's shown; drafts in the text boxes are kept
+//   page.open(id);    // open a post's chat (e.g. from a notification)
 //
 // Everything people write is shown as plain text (no links or formatting), so there's nothing to sanitize and
 // nothing for spammers to gain.
@@ -19,6 +22,7 @@
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const when = (t) => new Date(t).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 const time = (t) => `<time datetime="${new Date(t).toISOString()}">${esc(when(t))}</time>`;
+const editedTag = (m) => (m.edited ? `<span class="fb-edited" title="Edited ${esc(when(m.edited))}">edited</span>` : "");
 const STATUS_LABELS = { open: "Open", done: "Done", wontdo: "Won't do" };
 
 export function mountFeedback(el, {
@@ -53,7 +57,7 @@ export function mountFeedback(el, {
   const setStatus = (text, err) => { status.textContent = text; status.classList.toggle("fb-err", Boolean(err)); };
   const showCount = () => { count.textContent = `${box.value.length} / ${box.maxLength}`; };
   showCount();
-  let openId = null, poll = null;
+  let openId = null, poll = null, editing = false; // editing: a post or reply is being edited, so don't redraw it
 
   // Changes are always sent as JSON (an empty object if there's nothing to say), since some apps only accept JSON for
   // anything but GET, as a guard against cross-site form posts.
@@ -83,7 +87,7 @@ export function mountFeedback(el, {
     if (max && box.maxLength !== max) { box.maxLength = max; showCount(); }
     list.innerHTML = items.length
       ? items.map((it) => `<article class="fb-item${it.mine ? " fb-mine" : ""}" data-open="${esc(it.id)}" role="button" tabindex="0" aria-label="Open this feedback's chat">
-          <div class="fb-meta">${statusTag(it.status)}${byline(it, false)}${time(it.created)}
+          <div class="fb-meta">${statusTag(it.status)}${byline(it, false)}${time(it.created)}${editedTag(it)}
             ${it.replies ? `<span class="fb-replies">${it.replies === 1 ? "1 reply" : `${it.replies} replies`}</span>` : ""}
             ${it.canDelete ? `<button type="button" class="fb-delete ${esc(buttonClass)}" data-delete="${esc(it.id)}">Delete</button>` : ""}</div>
           ${text(it)}</article>`).join("")
@@ -98,13 +102,16 @@ export function mountFeedback(el, {
   const shape = (t) => `${t.status}|${t.canReply}|${t.canClose}`;
   let shown = null; // the thread as last drawn
   function messagesHtml(t) {
-    const bubble = (m, op) => `<div class="fb-msg${m.mine ? " fb-msg-mine" : ""}${m.admin ? " fb-msg-admin" : ""}">
-        <div class="fb-meta">${byline(m, op)}${time(m.created)}</div>${text(m)}</div>`;
+    // key: "post" for the post itself, else the reply's id, for editing.
+    const bubble = (m, op, key) => `<div class="fb-msg${m.mine ? " fb-msg-mine" : ""}${m.admin ? " fb-msg-admin" : ""}" data-key="${esc(key)}">
+        <div class="fb-meta">${byline(m, op)}${time(m.created)}${editedTag(m)}
+          ${m.mine ? `<button type="button" class="fb-edit ${esc(buttonClass)}" data-edit="${esc(key)}">Edit</button>` : ""}</div>${text(m)}</div>`;
     const closed = t.status === "done" ? `A developer marked this as done.${t.mine ? " Thank you!" : ""}`
       : t.status === "wontdo" ? "A developer closed this as won't do." : "";
-    return bubble(t, true) + t.messages.map((m) => bubble(m, m.op)).join("") + (closed ? `<p class="fb-sys">${esc(closed)}</p>` : "");
+    return bubble(t, true, "post") + t.messages.map((m) => bubble(m, m.op, m.id)).join("") + (closed ? `<p class="fb-sys">${esc(closed)}</p>` : "");
   }
   function drawThread(t) {
+    editing = false;
     const draft = threadEl.querySelector(".fb-reply-body")?.value || "";
     shown = t;
     const closeBtn = (s, label) => `<button type="button" class="${esc(buttonClass)}" data-set-status="${s}">${esc(label)}</button>`;
@@ -126,6 +133,7 @@ export function mountFeedback(el, {
     if (reply) reply.value = draft;
   }
   function redrawMessages(t) {
+    if (editing) return; // the next check catches up
     if (shape(t) !== shape(shown)) return drawThread(t);
     shown = t;
     const msgs = threadEl.querySelector(".fb-msgs"), html = messagesHtml(t);
@@ -188,8 +196,42 @@ export function mountFeedback(el, {
     const item = e.target.closest?.("[data-open]");
     if (item && e.target === item && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openThread(item.dataset.open); }
   });
+  // Editing: the post's or reply's text turns into a text box, with Save and Cancel.
+  function startEdit(key) {
+    const m = key === "post" ? shown : shown?.messages.find((x) => x.id === key);
+    const el = threadEl.querySelector(`.fb-msg[data-key="${CSS.escape(key)}"]`);
+    if (!m || !el || editing) return;
+    editing = true;
+    el.querySelector(".fb-text").outerHTML = `<form class="fb-edit-form" novalidate>
+        <label class="fb-label" for="fbEditBox">Edit</label>
+        <textarea id="fbEditBox" class="fb-edit-body" rows="3" maxlength="${box.maxLength}" required></textarea>
+        <div class="fb-actions"><span class="fb-edit-status" role="status"></span>
+          <button type="button" class="${esc(buttonClass)}" data-edit-cancel>Cancel</button>
+          <button type="submit" class="${esc(primaryClass)}">Save</button></div></form>`;
+    el.querySelector(".fb-edit")?.remove();
+    const input = el.querySelector(".fb-edit-body");
+    input.value = m.body; input.focus();
+    // Back to showing messages: the saved thread, or (on Cancel) the one already shown.
+    const done = (t = shown) => {
+      editing = false;
+      if (shape(t) !== shape(shown)) return drawThread(t);
+      shown = t;
+      const msgs = threadEl.querySelector(".fb-msgs"), html = messagesHtml(t);
+      msgs.innerHTML = html; msgs.dataset.drawn = html;
+    };
+    el.querySelector("[data-edit-cancel]").onclick = () => done();
+    el.querySelector(".fb-edit-form").onsubmit = async (e) => {
+      e.preventDefault();
+      const body = input.value.trim(), note = el.querySelector(".fb-edit-status");
+      if (!body) { note.textContent = "Write something first."; note.classList.add("fb-err"); return; }
+      try { done(await call("PUT", key === "post" ? itemUrl(openId) : `${itemUrl(openId)}/replies/${encodeURIComponent(key)}`, { body })); }
+      catch (err) { note.textContent = err.message; note.classList.add("fb-err"); }
+    };
+  }
   threadEl.addEventListener("click", async (e) => {
     if (e.target.closest(".fb-back")) return closeThread();
+    const ed = e.target.closest("[data-edit]");
+    if (ed) return startEdit(ed.dataset.edit);
     const b = e.target.closest("[data-set-status]");
     if (!b || !openId) return;
     b.disabled = true;
@@ -216,5 +258,5 @@ export function mountFeedback(el, {
   });
 
   refreshList();
-  return { refresh };
+  return { refresh, open: openThread };
 }

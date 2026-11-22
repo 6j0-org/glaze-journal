@@ -461,6 +461,15 @@ async function handle(req, res) {
     feedbackCall(() => feedback.remove(feedbackWho(uid), m[1]));
     return send(res, 204);
   }
+  if (m && req.method === "PUT") { // editing your own post
+    const body = await readJson(req);
+    return send(res, 200, feedbackCall(() => feedback.edit(feedbackWho(uid), m[1], body.body)));
+  }
+  m = /^\/api\/feedback\/([A-Za-z0-9_-]{1,32})\/replies\/([A-Za-z0-9_-]{1,32})$/.exec(p);
+  if (m && req.method === "PUT") { // editing one of your replies
+    const body = await readJson(req);
+    return send(res, 200, feedbackCall(() => feedback.edit(feedbackWho(uid), m[1], body.body, m[2])));
+  }
   m = /^\/api\/feedback\/([A-Za-z0-9_-]{1,32})\/(replies|status)$/.exec(p);
   if (m && req.method === "POST") {
     const body = await readJson(req), who = feedbackWho(uid);

@@ -61,6 +61,11 @@ assert.equal((await a.api("GET", "/api/feedback/" + f1.id)).messages.length, 1);
 await assert.rejects(a.api("POST", `/api/feedback/${f1.id}/status`, { status: "done" }), { status: 403 });
 await assert.rejects(b.api("GET", "/api/feedback/" + f1.id), { status: 404 }, "another demo visitor can't open it");
 await assert.rejects(b.api("POST", `/api/feedback/${f1.id}/replies`, { body: "hi" }), { status: 404 });
+th = await a.api("PUT", "/api/feedback/" + f1.id, { body: "Photo viewer, please" });
+assert.equal(th.body, "Photo viewer, please", "editing your own post");
+th = await a.api("PUT", `/api/feedback/${f1.id}/replies/${th.messages[0].id}`, { body: "And pinch to zoom" });
+assert.deepEqual([th.messages[0].body, th.messages[0].edited > 0], ["And pinch to zoom", true], "and reply");
+await assert.rejects(b.api("PUT", "/api/feedback/" + f1.id, { body: "x" }), { status: 404 });
 await a.api("DELETE", "/api/feedback/" + f1.id);
 assert.deepEqual((await a.api("GET", "/api/feedback")).items, []);
 

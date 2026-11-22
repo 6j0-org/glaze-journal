@@ -19,7 +19,7 @@ assert.deepEqual(fb.list(ann), { items: [], maxLength: 2048, isAdmin: false });
 // Posting: cleaned up, limited in length, and never showing who wrote it.
 const a1 = fb.post(ann, "  The viewer is great.\r\nCould it zoom?\u0007  ");
 assert.equal(a1.body, "The viewer is great.\nCould it zoom?", "trimmed, CRLF to LF, control characters dropped");
-assert.deepEqual(Object.keys(a1).sort(), ["admin", "body", "canDelete", "created", "id", "mine", "replies", "status", "updated"]);
+assert.deepEqual(Object.keys(a1).sort(), ["admin", "body", "canDelete", "created", "edited", "id", "mine", "replies", "status", "updated"]);
 assert.deepEqual([a1.status, a1.replies], ["open", 0]);
 fails(() => fb.post(ann, "   "), 400, /Write something/);
 fails(() => fb.post(ann, 42), 400);
@@ -88,6 +88,17 @@ fails(() => fb.reply({ user: "eve" }, t1.id, "x".repeat(2049)), 400);
 // eve's post and two replies count toward her limit of 3.
 fails(() => fb.post({ user: "eve" }, "more"), 429);
 fails(() => fb.reply({ user: "eve" }, t1.id, "more"), 429);
+// Editing: your own post or reply only; it says when, and counts toward the limits (fay has room, eve doesn't).
+const fayReply = th.messages[2].id;
+fails(() => fb.edit(bob, t1.id, "mine now"), 403, /only edit what you wrote/);
+fails(() => fb.edit(admin, t1.id, "dev edit", fayReply), 403);
+fails(() => fb.edit({ user: "fay" }, t1.id, "x", "nope"), 404, /reply wasn't found/);
+fails(() => fb.edit({ user: "fay" }, t1.id, "   ", fayReply), 400);
+clock += 1000;
+th = fb.edit({ user: "fay" }, t1.id, "+1, and the map, too.", fayReply);
+assert.deepEqual([th.messages[2].body, th.messages[2].edited], ["+1, and the map, too.", clock]);
+assert.equal(th.edited, 0, "the post itself isn't edited");
+fails(() => fb.edit({ user: "eve" }, t1.id, "Dark mode, please!"), 429);
 const thread1 = fb.thread(admin, t1.id);
 
 // The file: one JSON object per line, posts and deletions.
@@ -99,7 +110,8 @@ const before = fb.list(admin).items;
 // Restart: the same posts, and the deleted one's text is gone from the disk.
 fb = open();
 assert.deepEqual(fb.list(admin).items, before, "everything is still there after a restart");
-assert.deepEqual(fb.thread(admin, t1.id), thread1, "replies and status too");
+assert.deepEqual(fb.thread(admin, t1.id), thread1, "replies, edits, and status too");
+assert.ok(!fs.readFileSync(file, "utf8").includes('"edit"'), "edits are folded in when compacted");
 assert.equal(fb.doneCount("eve"), 1);
 const text = fs.readFileSync(file, "utf8");
 assert.ok(!text.includes("Could it zoom"), "deleted text is compacted away");
@@ -132,6 +144,8 @@ assert.equal(k1.author, "icon-ann");
 const k2 = fb.reply(bob, k1.id, "hi");
 assert.deepEqual([k2.author, k2.messages[0].author], ["icon-ann", null]);
 assert.equal(fb.list(bob).items[0].author, "icon-ann");
+const k3 = fb.edit(ann, k1.id, "hello!");
+assert.deepEqual([k3.body, k3.edited > 0, fb.list(bob).items[0].body], ["hello!", true, "hello!"], "editing your own post");
 
 // "own": people see only their own posts (the demo); admins see all.
 fb = open({ scope: "own", file: path.join(dir, "own.jsonl") });

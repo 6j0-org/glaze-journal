@@ -60,6 +60,12 @@ await B.click("#fbReply");
 await B.send("Input.insertText", { text: "Or double-tap." });
 await B.click(".fb-reply-send");
 await B.until(`document.querySelectorAll('.fb-msg').length === 2`);
+// Editing my reply: Edit turns it into a text box; Save shows the new text, marked as edited.
+await B.ev(`document.querySelectorAll('.fb-msg')[1].querySelector('.fb-edit').click()`);
+await B.until(`document.getElementById('fbEditBox')`);
+await B.ev(`document.getElementById('fbEditBox').value = 'Or a double-tap.'; document.querySelector('.fb-edit-form').requestSubmit()`);
+await B.until(`document.querySelectorAll('.fb-msg')[1]?.querySelector('.fb-text')?.textContent === 'Or a double-tap.'`);
+assert.equal(await B.ev(`document.querySelectorAll('.fb-msg')[1].querySelector('.fb-edited').textContent`), "edited");
 await B.click(".fb-back");
 await B.until(`document.querySelector('.fb-item .fb-replies')`);
 assert.equal(await B.ev(`document.querySelector('.fb-item .fb-replies').textContent`), "1 reply");
