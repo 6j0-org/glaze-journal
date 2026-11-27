@@ -258,7 +258,7 @@ import { mountFeedback } from "/feedback.js";
   function renderSignIn() {
     const intro = state.auth === "locked"
       ? `<h3>Unlock your journal</h3><p>This device doesn't have your journal's key any more. Sign in again to unlock it.</p>`
-      : `<h3>Sign in to your journal</h3><p>Glaze Journal uses your 6j0.org identity: one passkey (or username and password) for every 6j0.org app. Your glazes, firing log, and photos are encrypted in your browser, so only you can read them.</p>`;
+      : `<h3>Sign in to your journal</h3><p>Glaze Journal uses your 6j0.org identity: one username and password for every 6j0.org app. Your glazes, firing log, and photos are encrypted in your browser, so only you can read them.</p>`;
     return `<div class="empty signin">${intro}
       <button class="btn primary" data-act="sign-in">Sign in with 6j0.org</button>
       <p class="meta err" id="signInErr"${state.authError ? "" : " hidden"}>${esc(state.authError)}</p></div>`;
