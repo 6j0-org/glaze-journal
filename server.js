@@ -11,7 +11,7 @@ import os from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { importProduct, fetchImage, ImportError } from "./importer.js";
 import { SOURCES, sourceById, linesByBrand, completeItem } from "./catalog.js";
-import { verifyIdToken, IdTokenError } from "./idtoken.js";
+import { verifyIdToken, verifyDeletionToken, IdTokenError } from "./idtoken.js";
 import { createFeedback, FeedbackError } from "./feedback.js";
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -32,11 +32,11 @@ const PUBLIC_DIR = path.join(import.meta.dirname, "public");
 const MAX_PHOTO_BYTES = 25 * 1024 * 1024;
 const SESSION_DAYS = 30;
 
-// People sign in with an identity from a 6j0.org identity server at ID_ORIGIN. The browser goes to
+// People sign in with a 6j0 ID from the 6j0.org ID server at ID_ORIGIN. The browser goes to
 // ID_ORIGIN/authorize and comes back with a signed token in the URL fragment, which this server verifies.
-// ID_APP is this app's name in the identity server's APPS list. ID_JWKS_URL overrides where its public keys are
+// ID_APP is this app's name in the ID server's APPS list. ID_JWKS_URL overrides where its public keys are
 // fetched from (e.g. an in-cluster Service URL). ORIGIN (e.g. https://glaze.6j0.org) turns on Secure cookies.
-// Journals made before sign-in existed are unencrypted and belong to nobody until claimed: by the identity
+// Journals made before sign-in existed are unencrypted and belong to nobody until claimed: by the 6j0 ID
 // ID_OWNER_SUB if it is set, otherwise by the first account that signs in. The owner's browser then encrypts them.
 const ID = DEMO ? null : (() => {
   const origin = process.env.ID_ORIGIN || "";
@@ -45,7 +45,7 @@ const ID = DEMO ? null : (() => {
 })();
 const SECURE_COOKIE = String(process.env.ORIGIN || "").startsWith("https:") ? "; Secure" : "";
 const OWNER_SUB = process.env.ID_OWNER_SUB || "";
-// ADMIN_SUB: the 6j0.org identity of the developer, who can close and delete anyone's feedback, and whose own posts
+// ADMIN_SUB: the 6j0 ID of the developer, who can close and delete anyone's feedback, and whose own posts
 // and replies are labeled.
 const ADMIN_SUB = process.env.ADMIN_SUB || "";
 const UNCLAIMED = 0; // user_id of data from before sign-in existed
@@ -67,7 +67,9 @@ const STATIC_TYPES = {
 };
 fs.mkdirSync(PHOTO_DIR, { recursive: true });
 fs.mkdirSync(PRODUCT_DIR, { recursive: true });
-const db = new DatabaseSync(DEMO ? ":memory:" : path.join(DATA_DIR, "glaze-journal.db"));
+const DB_FILE = path.join(DATA_DIR, "glaze-journal.db");
+const DB_EXISTED = !DEMO && fs.existsSync(DB_FILE);
+const db = new DatabaseSync(DEMO ? ":memory:" : DB_FILE);
 // These CREATE TABLEs are the original schema and never change. Every change since is a numbered migration below,
 // tracked in PRAGMA user_version. Append new ones; never edit or reorder old ones.
 db.exec(`
@@ -83,7 +85,7 @@ db.exec(`
   );
 `);
 const MIGRATIONS = [
-  // 1: accounts and encryption. Each 6j0.org identity (sub) gets its own journal; existing rows get user_id 0
+  // 1: accounts and encryption. Each 6j0 ID (sub) gets its own journal; existing rows get user_id 0
   // (unclaimed). guid is a random public ID for the account (never the sub); wrapped_key is the journal key,
   // encrypted in the browser under a key derived from this app's 6j0.org app key.
   `CREATE TABLE users (
@@ -115,8 +117,25 @@ const MIGRATIONS = [
      size    INTEGER NOT NULL,
      fetched INTEGER NOT NULL
    );`,
+  // 3: whether the 6j0 ID's account key is saved, from the sign-in token's saved claim. 0: it was made with the ID
+  // server's temporary ID, so it lives only in one browser and the page warns. NULL: the ID server didn't say, which
+  // counts as saved. checked is when sign-in last said so, so the page can sign in again now and then to notice a
+  // save (which also keeps the ID in use, so the ID server doesn't delete it as unused).
+  `ALTER TABLE users ADD COLUMN id_saved INTEGER;
+   ALTER TABLE users ADD COLUMN checked INTEGER;`,
 ];
-for (let v = db.prepare("PRAGMA user_version").get().user_version; v < MIGRATIONS.length; v++) {
+// Before migrating an existing database, copy it to DATA_DIR/backups/ (VACUUM INTO makes a consistent copy, WAL
+// included), named for the version it was at and when. The migrations only touch the database, so photos and
+// feedback.jsonl need no copy. Backups are kept; delete old ones by hand. If the copy fails, the server doesn't start.
+const DB_VERSION = db.prepare("PRAGMA user_version").get().user_version;
+if (DB_EXISTED && DB_VERSION < MIGRATIONS.length) {
+  const dir = path.join(DATA_DIR, "backups");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `glaze-journal-v${DB_VERSION}-${new Date().toISOString().replace(/[:.]/g, "-")}.db`);
+  db.prepare("VACUUM INTO ?").run(file);
+  console.log(`Backed up the database (version ${DB_VERSION}) to ${file} before migrating it to version ${MIGRATIONS.length}`);
+}
+for (let v = DB_VERSION; v < MIGRATIONS.length; v++) {
   db.exec("BEGIN");
   try { db.exec(MIGRATIONS[v]); db.exec(`PRAGMA user_version = ${v + 1}`); db.exec("COMMIT"); }
   catch (e) { db.exec("ROLLBACK"); throw e; }
@@ -135,8 +154,9 @@ const q = {
   product: db.prepare("SELECT url, type FROM product_images WHERE id = ?"),
   putProduct: db.prepare(`INSERT INTO product_images (id, url, type, size, fetched) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (id) DO UPDATE SET type = excluded.type, size = excluded.size, fetched = excluded.fetched`),
-  userBySub: db.prepare("SELECT id FROM users WHERE sub = ?"),
-  user: db.prepare("SELECT guid, wrapped_key FROM users WHERE id = ?"),
+  userBySub: db.prepare("SELECT id, guid FROM users WHERE sub = ?"),
+  user: db.prepare("SELECT guid, wrapped_key, id_saved, checked FROM users WHERE id = ?"),
+  setSaved: db.prepare("UPDATE users SET id_saved = ?, checked = ? WHERE id = ?"),
   userIdentity: db.prepare("SELECT guid, sub FROM users WHERE id = ?"),
   addUser: db.prepare("INSERT INTO users (sub, guid, created) VALUES (?, ?, ?)"),
   setKey: db.prepare("UPDATE users SET wrapped_key = ? WHERE id = ? AND wrapped_key IS NULL"),
@@ -249,14 +269,16 @@ function sweepOrphans() {
   const used = referencedPhotoIds();
   for (const r of q.oldPhotos.all(Date.now() - 24 * 3600 * 1000)) if (!used.has(r.id)) deletePhoto(r.id, r.type);
 }
+// An account's photos, journal, and sessions (ON DELETE CASCADE), and the account itself.
+function deleteAccount(id) {
+  for (const r of q.userPhotos.all(id)) deletePhoto(r.id, r.type);
+  q.delUserDocs.run(id);
+  q.delUser.run(id);
+}
 // Demo visitors' accounts, journals, and photos are deleted after a day.
 const DEMO_VISITOR_MS = 24 * 3600 * 1000;
 function pruneDemoVisitors() {
-  for (const { id } of q.oldUsers.all(Date.now() - DEMO_VISITOR_MS)) {
-    for (const r of q.userPhotos.all(id)) deletePhoto(r.id, r.type);
-    q.delUserDocs.run(id);
-    q.delUser.run(id); // and its sessions (ON DELETE CASCADE)
-  }
+  for (const { id } of q.oldUsers.all(Date.now() - DEMO_VISITOR_MS)) deleteAccount(id);
 }
 function sweep() {
   if (DEMO) pruneDemoVisitors();
@@ -287,7 +309,7 @@ function newSessionCookie(uid) {
   q.addSession.run(tokenHash(token), uid, Date.now());
   return `sid=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_DAYS * 86400}${SECURE_COOKIE}`;
 }
-// Find or create the account for a verified identity, and hand it any unclaimed (pre-sign-in) journal.
+// Find or create the account for a verified 6j0 ID, and hand it any unclaimed (pre-sign-in) journal.
 function accountFor(sub) {
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -374,10 +396,34 @@ async function handle(req, res) {
     } catch (e) {
       if (e instanceof IdTokenError) throw new HttpError(401, e.message);
       console.error(e);
-      throw new HttpError(502, "Couldn't reach the 6j0.org identity server. Please try again.");
+      throw new HttpError(502, "Couldn't reach the 6j0.org ID server. Please try again.");
     }
-    const uid = accountFor(claims.sub), u = q.user.get(uid);
+    const uid = accountFor(claims.sub);
+    q.setSaved.run(claims.saved === false ? 0 : 1, Date.now(), uid);
+    const u = q.user.get(uid);
     return send(res, 200, { guid: u.guid, wrappedKey: u.wrapped_key }, { "Set-Cookie": newSessionCookie(uid), "Cache-Control": "no-store" });
+  }
+
+  // The ID server says a 6j0 ID was deleted ({ token }, a signed deletion notice; see idtoken.js): erase its
+  // account here, with its journal, photos, sessions, and feedback. Answers 200 also when there's no such account,
+  // so the ID server stops retrying.
+  if (p === "/api/id/deleted" && req.method === "POST" && !DEMO) {
+    const body = await readJson(req);
+    let claims;
+    try {
+      claims = await verifyDeletionToken(body.token, { issuer: ID.origin, audience: ID.app, jwksUrl: ID.jwksUrl });
+    } catch (e) {
+      if (e instanceof IdTokenError) throw new HttpError(401, e.message);
+      console.error(e);
+      throw new HttpError(502, "Couldn't load the 6j0.org ID server's keys.");
+    }
+    const u = q.userBySub.get(claims.sub);
+    if (u) {
+      feedback.eraseUser(u.guid);
+      deleteAccount(u.id);
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); // don't leave copies of its rows in the write-ahead log
+    }
+    return send(res, 200, { ok: true });
   }
 
   if (p === "/api/logout" && req.method === "POST") {
@@ -404,10 +450,13 @@ async function handle(req, res) {
     return send(res, 200, { ok: true });
   }
 
+  // idUnsaved: the 6j0 ID is a temporary one, not saved at the ID server yet, so the page warns and links there to
+  // save it. idRecheck: sign-in last said so a week or more ago, so the page signs in again to see if it's saved.
   if (p === "/api/state" && req.method === "GET") {
     const u = q.user.get(uid), lists = getDoc(uid, "config", "lists");
+    const unsaved = u.id_saved === 0 ? { idUnsaved: true, idRecheck: !u.checked || u.checked < Date.now() - 7 * 86400 * 1000 } : {};
     return send(res, 200, {
-      guid: u.guid, wrappedKey: u.wrapped_key,
+      guid: u.guid, wrappedKey: u.wrapped_key, ...unsaved,
       lists: lists ? forClient("lists", lists) : null,
       glazes: listDocs(uid, "glazes").map(({ id, ...d }) => forClient(id, d)),
       logs: listDocs(uid, "logs").map(({ id, ...d }) => forClient(id, d)),

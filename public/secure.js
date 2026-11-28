@@ -1,7 +1,7 @@
 // Glaze Journal client-side encryption. The server only ever stores ciphertext for journals.
 //
 // Keys
-// - Sign-in goes through a 6j0.org identity server (see the handoff below). Besides a signed token, it hands this
+// - Sign-in goes through the 6j0.org ID server (see the handoff below). Besides a signed token, it hands this
 //   page Glaze Journal's own 32-byte *app key*, encrypted to a one-time key the page made. Other 6j0.org apps get
 //   different app keys, so they can't read journals.
 // - HKDF turns the app key into a key-encryption key (KEK) that wraps the account's random 256-bit *journal key*.
@@ -113,10 +113,10 @@ export async function decryptPhoto(buf) {
   return new Blob([body.subarray(1 + n)], { type: td.decode(body.subarray(1, 1 + n)) });
 }
 
-// ---------- 6j0.org identity handoff ----------
+// ---------- 6j0 ID handoff ----------
 // 1. startIdSignIn: make an ephemeral ECDH P-256 key pair and a random nonce, keep them in IndexedDB, and go to
 //    <idOrigin>/authorize?app=<idApp>&nonce=<nonce>&epk=<x>.<y>.
-// 2. The identity server signs the person in, derives this app's key, encrypts it to our public key, and sends the
+// 2. The ID server signs the person in, derives this app's key, encrypts it to our public key, and sends the
 //    browser back here with #id_token=<signed token>&epk=<its public key>&key=<iv.ciphertext>&state=<nonce>.
 //    The fragment never reaches any server.
 // 3. finishIdSignIn: check the nonce, decrypt the app key, have the server verify the token (which starts a
@@ -166,7 +166,7 @@ export async function finishIdSignIn(api) {
   }
   if (wrapped) {
     let raw;
-    try { raw = await openBytes(kek, wrapped); } catch { throw new Error("Couldn't unlock your journal with this identity."); }
+    try { raw = await openBytes(kek, wrapped); } catch { throw new Error("Couldn't unlock your journal with this 6j0 ID."); }
     await installKey(res.guid, await subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]));
     raw.fill(0);
   }

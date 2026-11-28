@@ -10,6 +10,7 @@
 //   {"status":"<post id>","value":"done","by":"…","at":…}              closed as "done" or "wontdo", or reopened ("open")
 //   {"edit":"<post or reply id>","body":"…","by":"…","at":…}           a post or reply edited by its author
 //   {"delete":"<post id>","by":"…","at":1763600500000}                 a post deleted, with its thread
+//   {"erase":"<user>","at":…}                                          everything a user wrote deleted (their account was)
 // The whole file is read at startup and kept in memory. At startup the file is also compacted (rewritten without
 // deleted posts and their replies, then renamed into place) when anything was deleted, so deleted text doesn't stay
 // on disk past the next restart. Compacted posts carry their status as "status" and "closed" fields, and edited posts
@@ -35,6 +36,8 @@
 //   feedback.setStatus(who, id, s)  → the thread ("open", "done", or "wontdo"; admins only)
 //   feedback.edit(who, id, body, replyId)  → the thread, with the post (or that reply) changed; its author only
 //   feedback.remove(who, id)
+//   feedback.eraseUser(user)        deletes every post (with its thread) and reply this account wrote, e.g. when the
+//                                   account is deleted; gone from disk at the next restart, like other deletions
 //   feedback.doneCount(user)        → how many of this account's posts admins closed as done
 //   feedback.authorOf(id)           → the post's author's user ID (for the app's own use, e.g. notifications)
 // Bad input and limits throw FeedbackError with an HTTP status and a message fit to show people.
@@ -67,6 +70,13 @@ export function createFeedback({
   const replyOf = new Map(); // reply id → its post
   const recent = [];       // { user, created } of posts and replies in the last day, deleted ones included, for the limits
   const remember = (user, created) => { if (now() - created < DAY) recent.push({ user, created }); };
+  // Everything one user wrote: their posts, with their threads, and their replies in everyone else's.
+  const erase = (user) => {
+    for (const [id, p] of posts) {
+      if (p.user === user) { posts.delete(id); for (const r of p.replies) replyOf.delete(r.id); continue; }
+      p.replies = p.replies.filter((r) => { if (r.user !== user) return true; replyOf.delete(r.id); return false; });
+    }
+  };
 
   // Load, and compact if anything was deleted.
   let deletions = 0, skipped = 0;
@@ -76,6 +86,7 @@ export function createFeedback({
       let r;
       try { r = JSON.parse(line); } catch { skipped++; continue; } // e.g. a line cut short by a crash
       if (typeof r.delete === "string") { posts.delete(r.delete); deletions++; }
+      else if (typeof r.erase === "string") { erase(r.erase); deletions++; }
       else if (typeof r.edit === "string" && typeof r.body === "string") {
         const p = posts.get(r.edit), parent = replyOf.get(r.edit), x = p || parent?.replies.find((y) => y.id === r.edit);
         if (x && (p || posts.has(parent.id))) { x.body = r.body; x.edited = r.at; }
@@ -224,6 +235,11 @@ export function createFeedback({
       if (!who.admin && p.user !== who.user) throw new FeedbackError(403, "You can only delete your own feedback.");
       append({ delete: id, by: who.user, at: now() });
       posts.delete(id);
+    },
+    eraseUser(user) {
+      if (typeof user !== "string" || !user) return;
+      append({ erase: user, at: now() });
+      erase(user);
     },
     doneCount(user) {
       let n = 0;

@@ -18,6 +18,7 @@ import { mountFeedback } from "/feedback.js";
     filter: { kind: "all", glaze: "", clay: "" },
     glazeFilter: "",
     canUpload: true,
+    config: null, // /api/config: { idOrigin, idApp }, or { demo: true }
     auth: "unknown", // "unknown" | "in" | "out" | "locked" (signed in, but this device doesn't have the journal key)
     authError: "",
     demo: false, // server DEMO=1: no sign-in; each browser gets its own throwaway journal, filled in by demo.js
@@ -162,6 +163,7 @@ import { mountFeedback } from "/feedback.js";
         try {
           const raw = await api("GET", "/api/state");
           if (!raw.wrappedKey || !(await loadKey(raw.guid))) { locked(); return; }
+          if (await idUnsaved(raw)) return; // on the way to the ID server to check again
           snap = await decryptState(raw);
           state.auth = "in"; showAuthUi();
           showBanner(snap.bad ? `${snap.bad} record${snap.bad === 1 ? "" : "s"} couldn't be decrypted with this account's key and ${snap.bad === 1 ? "is" : "are"} hidden.` : "");
@@ -204,11 +206,31 @@ import { mountFeedback } from "/feedback.js";
     } catch { return file; }
   }
 
-  // ---------- sign-in with a 6j0.org identity (the handoff and keys are in secure.js) ----------
+  // ---------- sign-in with a 6j0 ID (the handoff and keys are in secure.js) ----------
   async function startSignIn() {
     const r = await fetch("/api/config");
     if (!r.ok) throw new Error("Can't reach the Glaze Journal server.");
     await startIdSignIn(await r.json());
+  }
+
+  // A temporary 6j0 ID (made with the ID server's temporary-ID button) lives only in the browser that made it until
+  // it's saved at the ID server; /api/state says idUnsaved. The page warns, with a link to save it at
+  // <idOrigin>/#save. Sign-in runs again (an instant redirect while the ID server still has the ID) to see whether
+  // it's been saved: on the next refresh within a day of following that link, and otherwise once a week (idRecheck),
+  // which also keeps the ID in use, so the ID server doesn't delete it. At most once every 10 minutes, so an ID
+  // server that can't sign the browser in doesn't send it round in circles. True when it's sending the browser away.
+  const ID_SAVE_CLICKED = "glaze-id-save-clicked", ID_RECHECKED = "glaze-id-rechecked";
+  const stored = (k) => { try { return Number(localStorage.getItem(k)) || 0; } catch { return 0; } };
+  const remember = (k, v) => { try { localStorage.setItem(k, String(v)); } catch {} };
+  async function idUnsaved(raw) {
+    $("#idUnsaved").hidden = !raw.idUnsaved || state.demo;
+    if (!raw.idUnsaved || state.demo || !state.config?.idOrigin) return false;
+    $("#idSave").href = `${state.config.idOrigin}/#save`;
+    const now = Date.now();
+    if (!raw.idRecheck && stored(ID_SAVE_CLICKED) < now - 24 * 3600 * 1000) return false;
+    if (stored(ID_RECHECKED) > now - 10 * 60 * 1000) return false;
+    remember(ID_RECHECKED, now); remember(ID_SAVE_CLICKED, 0);
+    try { await startIdSignIn(state.config); return true; } catch (e) { console.warn(e); return false; }
   }
 
   async function signOut() {
@@ -221,6 +243,7 @@ import { mountFeedback } from "/feedback.js";
     feedbackPage = null;
     clearPhotos();
     const cleared = clearKey();
+    $("#idUnsaved").hidden = true;
     document.querySelectorAll("dialog[open]").forEach((d) => d.close());
     showBanner(""); showAuthUi(); render();
     return cleared;
@@ -252,13 +275,14 @@ import { mountFeedback } from "/feedback.js";
     $("nav.tabs").hidden = state.auth !== "in";
     $("#signOut").hidden = state.auth !== "in" && state.auth !== "locked";
     $("#feedbackLink").hidden = state.auth !== "in";
+    $("#deleteNote").hidden = state.auth !== "in" || state.demo || !state.config?.idOrigin;
     if (state.demo) { $("#signOut").textContent = "Start over"; $("#signOut").title = "Demo: replace this journal with a fresh demo one"; }
   }
 
   function renderSignIn() {
     const intro = state.auth === "locked"
       ? `<h3>Unlock your journal</h3><p>This device doesn't have your journal's key any more. Sign in again to unlock it.</p>`
-      : `<h3>Sign in to your journal</h3><p>Glaze Journal uses your 6j0.org identity: one username and password for every 6j0.org app. Your glazes, firing log, and photos are encrypted in your browser, so only you can read them.</p>`;
+      : `<h3>Sign in to your journal</h3><p>Glaze Journal uses your anonymous 6j0 ID: one account key for every 6j0.org app. Your glazes, firing log, and photos are encrypted in your browser, so only you can read them.</p>`;
     return `<div class="empty signin">${intro}
       <button class="btn primary" data-act="sign-in">Sign in with 6j0.org</button>
       <p class="meta err" id="signInErr"${state.authError ? "" : " hidden"}>${esc(state.authError)}</p></div>`;
@@ -1046,7 +1070,12 @@ import { mountFeedback } from "/feedback.js";
   async function boot() {
     if (hasIdCallback()) try { await finishIdSignIn(api); } catch (e) { state.authError = e.message || "Sign-in failed."; }
     $("#signOut").addEventListener("click", signOut);
-    try { const r = await fetch("/api/config"); state.demo = r.ok && Boolean((await r.json()).demo); } catch {}
+    $("#idSave").addEventListener("click", () => remember(ID_SAVE_CLICKED, Date.now()));
+    try {
+      const r = await fetch("/api/config");
+      if (r.ok) { state.config = await r.json(); state.demo = Boolean(state.config.demo); }
+    } catch {}
+    if (state.config?.idOrigin) $("#deleteAtId").href = `${state.config.idOrigin}/#delete`;
     store = apiStore();
     store.watch("config", (cfg) => {
       state.lists = cfg ? { brands: cfg.brands || [], types: cfg.types || [], clays: cfg.clays || [] } : clone(DEFAULTS);

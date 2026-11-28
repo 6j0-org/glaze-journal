@@ -25,6 +25,7 @@
   --accent-soft: #d4e6e0;
   --on-accent: #ffffff;
   --danger: #a8352a;
+  --warn-bg: #f6e7c4; --warn-ink: #5c4204;
   --shadow: 0 1px 2px rgb(20 30 28 / .06), 0 6px 20px rgb(20 30 28 / .07);
   --font-display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
   --font-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -34,6 +35,7 @@
   :root:not([data-theme="light"]) {
     --bg: #141918; --surface: #1c2321; --sunk: #232b29; --ink: #e4eae7; --muted: #98a59f;
     --line: #2f3a37; --accent: #79bfaa; --accent-soft: #24403a; --on-accent: #0e1715; --danger: #ef8a7d;
+    --warn-bg: #3d3216; --warn-ink: #f3dca2;
     --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 6px 20px rgb(0 0 0 / .25);
     color-scheme: dark;
   }
@@ -41,6 +43,7 @@
 :root[data-theme="dark"] {
   --bg: #141918; --surface: #1c2321; --sunk: #232b29; --ink: #e4eae7; --muted: #98a59f;
   --line: #2f3a37; --accent: #79bfaa; --accent-soft: #24403a; --on-accent: #0e1715; --danger: #ef8a7d;
+  --warn-bg: #3d3216; --warn-ink: #f3dca2;
   --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 6px 20px rgb(0 0 0 / .25);
   color-scheme: dark;
 }
@@ -66,6 +69,9 @@ nav.tabs a[aria-current="page"] { background: var(--surface); color: var(--ink);
 
 main { padding-block: 24px 64px; }
 .banner { background: var(--accent-soft); border-radius: var(--r); padding: 10px 14px; margin-bottom: 18px; font-size: .9rem; }
+/* A temporary 6j0 ID, not saved yet (app.js showIdUnsaved). */
+.banner.warn { background: var(--warn-bg); color: var(--warn-ink); display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; }
+.banner.warn span { flex: 1 1 260px; }
 .view-head { display: flex; align-items: end; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
 .view-head h2 { font-size: 1.7rem; font-weight: 700; }
 .view-head p { margin: 4px 0 0; color: var(--muted); }
@@ -315,8 +321,15 @@ dialog.lightbox::backdrop { background: rgb(0 0 0 / .6); }
 </header>
 
 <main class="wrap">
+  <div id="idUnsaved" class="banner warn" role="note" hidden>
+    <span><b>You haven't saved your 6j0 ID.</b> If you clear this browser's data or lose this device, you lose your
+      journal, for good.</span>
+    <a class="btn small" id="idSave" href="#">Save my ID</a>
+  </div>
   <div id="banner" class="banner" hidden></div>
   <section id="view"><p class="loading">Opening the studio…</p></section>
+  <p class="meta" id="deleteNote" hidden>To delete your journal, delete your 6j0 ID at the
+    <a id="deleteAtId" href="#">6j0.org ID page</a>. That deletes everything you have in every 6j0.org app.</p>
 </main>
 
 <!-- Log entry form -->

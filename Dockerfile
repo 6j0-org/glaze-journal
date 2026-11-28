@@ -9,7 +9,7 @@ COPY public ./public
 RUN mkdir -p /data && chown node:node /data
 VOLUME /data
 
-# ID_ORIGIN (the 6j0.org identity server, e.g. https://id.6j0.org) is required. Set ORIGIN (e.g.
+# ID_ORIGIN (the 6j0.org ID server, e.g. https://id.6j0.org) is required. Set ORIGIN (e.g.
 # https://glaze.6j0.org) when serving over HTTPS: it turns on Secure cookies. See README.md for the rest.
 ENV NODE_ENV=production PORT=3000 DATA_DIR=/data
 EXPOSE 3000
